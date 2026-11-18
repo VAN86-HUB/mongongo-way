@@ -725,6 +725,7 @@ async function vueDeposer() {
       <label for="d-paroles">Paroles (facultatif)</label>
       <textarea id="d-paroles"></textarea>
       <div class="progression cache" id="prog"><div></div></div>
+      <div id="erreur-depot" class="carte cache" style="border-color:var(--rouge);margin-top:14px"></div>
       <button class="btn plein" type="submit">Enregistrer le titre</button>
       <p class="doux petit" style="text-align:center">Le titre est d'abord enregistré en brouillon. Vous l'enverrez ensuite à l'administrateur pour validation.</p>
     </form>`;
@@ -762,6 +763,7 @@ async function vueDeposer() {
     $('#d-piste').placeholder = String(n + 1);
   };
 
+  const horo = Date.now();
   $('#form-depot').onsubmit = async (e) => {
     e.preventDefault();
     let fVid = $('#d-video').files[0];
@@ -777,12 +779,16 @@ async function vueDeposer() {
     const prog = $('#prog'); prog.classList.remove('cache');
     const avancer = (p, msg) => { prog.firstElementChild.style.width = p + '%'; bouton.textContent = msg; };
     const uid = etat.session.user.id;
-    const horo = Date.now();
+    const etape = { nom: 'préparation' };
+    $('#erreur-depot').classList.add('cache');
+    let verrouEcran = null;
+    try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
     try {
       let dureeSec = null;
       let typeA = 'audio/mpeg', extA = 'mp3';
       if (compresser) {
         const avant = fVid.size;
+        etape.nom = 'compression de la vidéo';
         avancer(2, 'Compression de la vidéo…');
         try {
           const info = infoVid || await lireInfosVideo(fVid);
@@ -798,6 +804,7 @@ async function vueDeposer() {
       }
       if (fVid) {
         // L'audio est une copie de la vidéo : extraction en MP3 sur le téléphone
+        etape.nom = 'extraction de l\'audio';
         avancer(30, 'Extraction de l\'audio…');
         try {
           const r = await extraireAudio(fVid, (x) => avancer(30 + Math.round(x * 12), `Extraction de l'audio… ${Math.round(x * 100)} %`));
@@ -815,8 +822,8 @@ async function vueDeposer() {
 
       avancer(44, 'Envoi de l\'audio…');
       const cheminAudio = `${uid}/${horo}.${extA}`;
-      const upA = await sb.storage.from('audio').upload(cheminAudio, fAudio, { contentType: typeA });
-      if (upA.error) throw upA.error;
+      etape.nom = 'envoi de l\'audio';
+      await envoyerFichier('audio', cheminAudio, fAudio, typeA, (x) => avancer(44 + Math.round(x * 10), `Envoi de l'audio… ${Math.round(x * 100)} %`));
 
       let cheminVid = null;
       if (fVid) {
@@ -824,8 +831,8 @@ async function vueDeposer() {
         const extV = fVid.type === 'video/webm' ? 'webm' : fVid.type === 'video/mp4' && !fVid.name ? 'mp4' : (fVid.name.split('.').pop() || 'mp4').toLowerCase();
         const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
         cheminVid = `${uid}/${horo}.${extV}`;
-        const upV = await sb.storage.from('videos').upload(cheminVid, fVid, { contentType: typeV });
-        if (upV.error) throw upV.error;
+        etape.nom = 'envoi de la vidéo';
+        await envoyerFichier('videos', cheminVid, fVid, typeV, (x) => avancer(55 + Math.round(x * 28), `Envoi de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
       }
 
       let cheminImg = null;
@@ -833,10 +840,12 @@ async function vueDeposer() {
         avancer(85, 'Envoi de la pochette…');
         const extI = (fImg.name.split('.').pop() || 'jpg').toLowerCase();
         cheminImg = `${uid}/${horo}.${extI}`;
-        const upI = await sb.storage.from('pochettes').upload(cheminImg, fImg, { contentType: fImg.type });
+        etape.nom = 'envoi de la pochette';
+        const upI = await sb.storage.from('pochettes').upload(cheminImg, fImg, { contentType: fImg.type, upsert: true });
         if (upI.error) throw upI.error;
       }
 
+      etape.nom = 'enregistrement du titre';
       avancer(95, 'Enregistrement…');
       const album = $('#d-album').value.trim() || null;
       const piste = Number($('#d-piste').value) || (album ? Number($('#d-piste').placeholder) || null : null);
@@ -857,14 +866,62 @@ async function vueDeposer() {
       });
       if (error) throw error;
       avancer(100, 'Terminé ✓');
+      try { verrouEcran?.release(); } catch (_) {}
       toast('Titre enregistré. Envoyez-le maintenant pour validation.');
       location.hash = '#/artiste';
     } catch (err) {
       erreur(err);
-      bouton.disabled = false; bouton.textContent = 'Enregistrer le titre';
+      const zoneErr = $('#erreur-depot');
+      zoneErr.innerHTML = `<b style="color:var(--rouge)">Échec à l'étape : ${esc(etape.nom)}</b><p class="petit" style="margin:6px 0 0">${esc(err?.message || String(err))}</p><p class="doux petit" style="margin:6px 0 0">Réessayez : les fichiers déjà envoyés seront réutilisés. Si l'erreur revient, faites une capture de ce message.</p>`;
+      zoneErr.classList.remove('cache');
+      zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      bouton.disabled = false; bouton.textContent = 'Réessayer';
+      try { verrouEcran?.release(); } catch (_) {}
       prog.classList.add('cache');
     }
   };
+}
+
+// Envoi d'un fichier vers Supabase Storage.
+// Au-delà de 6 Mo : envoi « résumable » par morceaux (TUS), qui reprend tout seul si la connexion coupe.
+async function envoyerFichier(bucket, chemin, fichier, type, progres) {
+  if (fichier.size <= 6 * 1024 * 1024) {
+    progres?.(0.1);
+    const { error } = await sb.storage.from(bucket).upload(chemin, fichier, { contentType: type, upsert: true });
+    if (error) throw error;
+    progres?.(1);
+    return;
+  }
+  const tus = await import('https://cdn.jsdelivr.net/npm/tus-js-client@4/+esm');
+  const Upload = tus.Upload || tus.default?.Upload;
+  const { data: { session } } = await sb.auth.getSession();
+  const ref = new URL(SUPABASE_URL).hostname.split('.')[0];
+  await new Promise((ok, ko) => {
+    const envoi = new Upload(fichier, {
+      endpoint: `https://${ref}.storage.supabase.co/storage/v1/upload/resumable`,
+      retryDelays: [0, 3000, 5000, 10000, 20000, 30000, 60000],
+      headers: { authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_CLE, 'x-upsert': 'true' },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      metadata: { bucketName: bucket, objectName: chemin, contentType: type, cacheControl: '3600' },
+      chunkSize: 6 * 1024 * 1024,
+      onError: (e) => ko(new Error(traduireErreurEnvoi(e))),
+      onProgress: (fait, total) => progres?.(total ? fait / total : 0),
+      onSuccess: () => ok()
+    });
+    envoi.findPreviousUploads().then((prec) => {
+      if (prec.length) envoi.resumeFromPreviousUpload(prec[0]);
+      envoi.start();
+    }).catch(() => envoi.start());
+  });
+}
+function traduireErreurEnvoi(e) {
+  const m = String(e?.message || e);
+  if (/413|too large|exceeded the maximum/i.test(m)) return 'Fichier trop lourd pour le serveur (50 Mo max.).';
+  if (/415|mime|content type/i.test(m)) return 'Format de fichier refusé par le serveur.';
+  if (/403|401|unauthor|row-level/i.test(m)) return 'Envoi refusé : reconnectez-vous puis réessayez.';
+  if (/network|failed to fetch|timeout|xhr/i.test(m)) return 'Connexion internet coupée pendant l\'envoi.';
+  return m;
 }
 
 // ---------- Compression vidéo sur le téléphone ----------
