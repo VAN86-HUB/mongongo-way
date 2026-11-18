@@ -150,7 +150,7 @@ function vueConnexion() {
   const dessiner = () => {
     vue.innerHTML = `
       <div class="accueil-connexion">
-        <img src="icons/icon-512.png" alt="">
+        <img src="icon-512.png" alt="">
         <h1>Mongongo <span style="color:var(--or)">Way</span></h1>
         <p class="doux">La voix des musiciens de Theway RDC.<br>Écoute gratuite, partout.</p>
         <div class="onglets">
@@ -293,7 +293,7 @@ async function jouer(t) {
         title: t.titre,
         artist: t.artistes?.nom_scene || 'Mongongo Way',
         album: 'Mongongo Way',
-        artwork: pochette ? [{ src: pochette, sizes: '512x512' }] : [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }]
+        artwork: pochette ? [{ src: pochette, sizes: '512x512' }] : [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }]
       });
       navigator.mediaSession.setActionHandler('nexttrack', () => suivant(1));
       navigator.mediaSession.setActionHandler('previoustrack', () => suivant(-1));
@@ -700,7 +700,7 @@ async function vueProfil() {
       <button id="deconnexion" style="color:var(--rouge)">Se déconnecter</button>
     </div>
     <div class="apropos">
-      <img src="icons/icon-192.png" width="40" height="40" alt="" style="border-radius:10px"><br>
+      <img src="icon-192.png" width="40" height="40" alt="" style="border-radius:10px"><br>
       <b style="color:var(--texte)">Mongongo Way</b> · version 1.0<br>
       La plateforme musicale des musiciens de Theway RDC<br>
       Conçue et développée par <b style="color:var(--texte)">Ingénieur Van MUFWAR</b>
