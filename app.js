@@ -696,6 +696,7 @@ async function vueDeposer() {
       <label for="d-video">Vidéo du chant (MP4, 50 Mo max.)</label>
       <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp">
       <p class="doux petit" style="margin:6px 0 0">L'audio est tiré automatiquement de la vidéo. Pas de vidéo ? Déposez seulement le fichier audio ci-dessous.</p>
+      <div id="bloc-compression" class="carte cache" style="margin:10px 0 0"></div>
 
       <label for="d-audio">Fichier audio (MP3 ou M4A, 30 Mo max.) — seulement sans vidéo</label>
       <input id="d-audio" type="file" accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,.mp3,.m4a,.aac">
@@ -728,7 +729,33 @@ async function vueDeposer() {
       <p class="doux petit" style="text-align:center">Le titre est d'abord enregistré en brouillon. Vous l'enverrez ensuite à l'administrateur pour validation.</p>
     </form>`;
 
-  $('#d-video').onchange = () => $('#bloc-prix-video').classList.toggle('cache', !$('#d-video').files[0]);
+  // Analyse de la vidéo choisie et proposition de compression
+  let infoVid = null;
+  $('#d-video').onchange = async () => {
+    const f = $('#d-video').files[0];
+    $('#bloc-prix-video').classList.toggle('cache', !f);
+    const bloc = $('#bloc-compression');
+    infoVid = null;
+    if (!f) { bloc.classList.add('cache'); return; }
+    bloc.classList.remove('cache');
+    bloc.innerHTML = '<span class="doux petit">Analyse de la vidéo…</span>';
+    infoVid = await lireInfosVideo(f);
+    const mo = f.size / 1048576;
+    const grand = Math.max(infoVid.largeur, infoVid.hauteur);
+    const conseil = mo > 20 || grand > 1280;
+    const estime = estimerTaille(infoVid.duree);
+    const tropLourd = mo > 50;
+    bloc.innerHTML = `
+      <div class="petit"><b>${mo.toFixed(1).replace('.', ',')} Mo</b> · ${infoVid.largeur}×${infoVid.hauteur} · ${duree(infoVid.duree)}</div>
+      <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:10px 0 0">
+        <input type="radio" name="compr" value="oui" ${conseil || tropLourd ? 'checked' : ''} style="width:auto;margin-top:4px">
+        <span><b>Compresser en ${grand > 1280 || infoVid.largeur > 1280 ? '720p' : 'qualité allégée'}</b>${conseil ? ' (recommandé)' : ''}<br><span class="doux petit">Environ ${estime} Mo · plus rapide à envoyer et à regarder</span></span>
+      </label>
+      <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:8px 0 0">
+        <input type="radio" name="compr" value="non" ${!conseil && !tropLourd ? 'checked' : ''} ${tropLourd ? 'disabled' : ''} style="width:auto;margin-top:4px">
+        <span><b>Garder l'original</b><br><span class="doux petit">${tropLourd ? 'Impossible : plus de 50 Mo' : 'Aucune perte de qualité'}</span></span>
+      </label>`;
+  };
   $('#d-album').oninput = () => {
     // Propose la piste suivante de l'album choisi
     const n = (mesAlbums || []).filter((x) => x.album === $('#d-album').value.trim()).reduce((m, x) => Math.max(m, x.piste || 0), 0);
@@ -737,11 +764,12 @@ async function vueDeposer() {
 
   $('#form-depot').onsubmit = async (e) => {
     e.preventDefault();
-    const fVid = $('#d-video').files[0];
+    let fVid = $('#d-video').files[0];
     let fAudio = $('#d-audio').files[0];
     const fImg = $('#d-pochette').files[0];
     if (!fVid && !fAudio) return toast('Choisissez la vidéo du chant, ou un fichier audio.', true);
-    if (fVid && fVid.size > 50 * 1024 * 1024) return toast('Vidéo trop lourde (50 Mo max.). Compressez-la en 720p avant l\'envoi.', true);
+    const compresser = !!fVid && $('input[name=compr]:checked')?.value !== 'non';
+    if (fVid && !compresser && fVid.size > 50 * 1024 * 1024) return toast('Vidéo trop lourde (50 Mo max.) : choisissez « Compresser ».', true);
     if (fAudio && fAudio.size > 30 * 1024 * 1024) return toast('Fichier audio trop lourd (30 Mo max.).', true);
     if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
 
@@ -753,11 +781,26 @@ async function vueDeposer() {
     try {
       let dureeSec = null;
       let typeA = 'audio/mpeg', extA = 'mp3';
+      if (compresser) {
+        const avant = fVid.size;
+        avancer(2, 'Compression de la vidéo…');
+        try {
+          const info = infoVid || await lireInfosVideo(fVid);
+          const res = await compresserVideo(fVid, info, (x, mode) => avancer(2 + Math.round(x * 28), `${mode === 'lent' ? 'Compression (gardez l\'écran allumé)' : 'Compression de la vidéo'}… ${Math.round(x * 100)} %`));
+          if (res.size < avant) fVid = res;
+          toast(`Vidéo compressée : ${(avant / 1048576).toFixed(0)} Mo → ${(fVid.size / 1048576).toFixed(0)} Mo`);
+        } catch (err) {
+          console.error(err);
+          if (avant > 50 * 1024 * 1024) throw new Error('La compression a échoué sur ce téléphone. Compressez la vidéo avec une autre application (ex. CapCut, en 720p), puis réessayez.');
+          toast('Compression impossible sur ce téléphone : la vidéo originale sera envoyée.');
+        }
+        if (fVid.size > 50 * 1024 * 1024) throw new Error('Même compressée, la vidéo dépasse 50 Mo. Raccourcissez-la ou compressez-la avec une autre application.');
+      }
       if (fVid) {
         // L'audio est une copie de la vidéo : extraction en MP3 sur le téléphone
-        avancer(5, 'Extraction de l\'audio…');
+        avancer(30, 'Extraction de l\'audio…');
         try {
-          const r = await extraireAudio(fVid, (x) => avancer(5 + Math.round(x * 30), `Extraction de l'audio… ${Math.round(x * 100)} %`));
+          const r = await extraireAudio(fVid, (x) => avancer(30 + Math.round(x * 12), `Extraction de l'audio… ${Math.round(x * 100)} %`));
           fAudio = r.fichier; dureeSec = r.duree;
         } catch (err) {
           console.error(err);
@@ -770,15 +813,15 @@ async function vueDeposer() {
         typeA = { mp3: 'audio/mpeg', m4a: 'audio/x-m4a', aac: 'audio/aac', mp4: 'audio/mp4' }[extA] || fAudio.type || 'audio/mpeg';
       }
 
-      avancer(38, 'Envoi de l\'audio…');
+      avancer(44, 'Envoi de l\'audio…');
       const cheminAudio = `${uid}/${horo}.${extA}`;
       const upA = await sb.storage.from('audio').upload(cheminAudio, fAudio, { contentType: typeA });
       if (upA.error) throw upA.error;
 
       let cheminVid = null;
       if (fVid) {
-        avancer(50, 'Envoi de la vidéo… (patientez)');
-        const extV = (fVid.name.split('.').pop() || 'mp4').toLowerCase();
+        avancer(55, 'Envoi de la vidéo… (patientez)');
+        const extV = fVid.type === 'video/webm' ? 'webm' : fVid.type === 'video/mp4' && !fVid.name ? 'mp4' : (fVid.name.split('.').pop() || 'mp4').toLowerCase();
         const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
         cheminVid = `${uid}/${horo}.${extV}`;
         const upV = await sb.storage.from('videos').upload(cheminVid, fVid, { contentType: typeV });
@@ -822,6 +865,101 @@ async function vueDeposer() {
       prog.classList.add('cache');
     }
   };
+}
+
+// ---------- Compression vidéo sur le téléphone ----------
+function lireInfosVideo(fichier) {
+  return new Promise((ok) => {
+    const v = document.createElement('video');
+    const u = URL.createObjectURL(fichier);
+    v.preload = 'metadata'; v.muted = true;
+    const fin = (r) => { URL.revokeObjectURL(u); ok(r); };
+    v.onloadedmetadata = () => fin({ largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: isFinite(v.duration) ? v.duration : 0 });
+    v.onerror = () => fin({ largeur: 0, hauteur: 0, duree: 0 });
+    v.src = u;
+    setTimeout(() => fin({ largeur: 0, hauteur: 0, duree: 0 }), 8000);
+  });
+}
+// Débit visé : environ 28 Mo pour le clip, entre 450 kb/s et 2 Mb/s pour l'image
+function debitVideo(dureeSec) {
+  const d = Math.max(30, dureeSec || 240);
+  return Math.round(Math.min(2_000_000, Math.max(450_000, (28 * 8 * 1e6) / d - 128_000)));
+}
+function estimerTaille(dureeSec) {
+  const d = Math.max(30, dureeSec || 240);
+  return Math.max(3, Math.round(((debitVideo(d) + 128_000) * d) / 8 / 1048576));
+}
+// Taille cible : 720p maximum, proportions gardées, dimensions paires
+function dimensionsCible(l, h) {
+  if (!l || !h) return { largeur: 1280, hauteur: 720 };
+  const k = Math.min(1, 1280 / Math.max(l, h), 720 / Math.min(l, h));
+  const pair = (x) => Math.max(2, Math.round(x / 2) * 2);
+  return { largeur: pair(l * k), hauteur: pair(h * k) };
+}
+
+async function compresserVideo(fichier, info, progres) {
+  const cible = dimensionsCible(info.largeur, info.hauteur);
+  const debit = debitVideo(info.duree);
+  // 1) Méthode rapide : encodeur vidéo du téléphone (WebCodecs), sortie MP4 H.264
+  if ('VideoEncoder' in window) {
+    try {
+      const mb = await import('https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/+esm');
+      const input = new mb.Input({ source: new mb.BlobSource(fichier), formats: mb.ALL_FORMATS });
+      const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
+      const conv = await mb.Conversion.init({
+        input, output,
+        video: { width: cible.largeur, height: cible.hauteur, fit: 'contain', codec: 'avc', bitrate: debit }
+      });
+      if (!conv.isValid) throw new Error('Conversion impossible : ' + JSON.stringify(conv.discardedTracks?.map((t) => t.reason)));
+      conv.onProgress = (p) => progres?.(p, 'rapide');
+      await conv.execute();
+      return new File([output.target.buffer], 'clip.mp4', { type: 'video/mp4' });
+    } catch (e) {
+      console.warn('Compression rapide impossible, passage à la méthode lente', e);
+    }
+  }
+  // 2) Méthode de secours : la vidéo est rejouée et réenregistrée (temps réel)
+  return compresserTempsReel(fichier, cible, debit, progres);
+}
+
+async function compresserTempsReel(fichier, cible, debit, progres) {
+  if (!('MediaRecorder' in window) || !HTMLCanvasElement.prototype.captureStream) throw new Error('Enregistrement vidéo non pris en charge');
+  const type = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+  if (!type) throw new Error('Aucun format d\'enregistrement disponible');
+  const u = URL.createObjectURL(fichier);
+  const v = document.createElement('video');
+  v.src = u; v.playsInline = true; v.preload = 'auto';
+  await new Promise((ok, ko) => { v.onloadeddata = ok; v.onerror = () => ko(new Error('Vidéo illisible')); });
+  const canvas = document.createElement('canvas');
+  canvas.width = cible.largeur; canvas.height = cible.hauteur;
+  const g = canvas.getContext('2d');
+  // Le son passe par Web Audio vers l'enregistreur, sans sortir du haut-parleur
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const actx = new Ctx();
+  const dest = actx.createMediaStreamDestination();
+  actx.createMediaElementSource(v).connect(dest);
+  const flux = canvas.captureStream(30);
+  dest.stream.getAudioTracks().forEach((t) => flux.addTrack(t));
+  const rec = new MediaRecorder(flux, { mimeType: type, videoBitsPerSecond: debit, audioBitsPerSecond: 128_000 });
+  const morceaux = [];
+  rec.ondataavailable = (e) => { if (e.data.size) morceaux.push(e.data); };
+  const arret = new Promise((ok) => { rec.onstop = ok; });
+  const dessiner = () => {
+    g.drawImage(v, 0, 0, cible.largeur, cible.hauteur);
+    if (v.duration) progres?.(v.currentTime / v.duration, 'lent');
+    if (!v.ended) requestAnimationFrame(dessiner);
+  };
+  rec.start(1000);
+  await actx.resume();
+  await v.play();
+  dessiner();
+  await new Promise((ok) => { v.onended = ok; });
+  rec.stop();
+  await arret;
+  actx.close();
+  URL.revokeObjectURL(u);
+  const mime = type.split(';')[0];
+  return new File(morceaux, mime === 'video/webm' ? 'clip.webm' : 'clip.mp4', { type: mime });
 }
 
 // Tire l'audio d'une vidéo et l'encode en MP3 (128 kb/s), directement sur le téléphone
