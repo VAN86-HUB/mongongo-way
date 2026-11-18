@@ -1,8 +1,8 @@
 // Service worker Mongongo Way : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v2';
+const VERSION = 'mongongo-v3';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
-  './icon-192.png', './icon-512.png'
+  './icon-192.png', './icon-512.png', './fond.jpg'
 ];
 
 self.addEventListener('install', (e) => {

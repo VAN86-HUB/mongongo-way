@@ -1,7 +1,7 @@
 :root {
   --fond: #141022;
-  --fond-2: #1d1830;
-  --carte: #241e3a;
+  --fond-2: rgba(29, 24, 48, .82);
+  --carte: rgba(36, 30, 58, .78);
   --ligne: #352d52;
   --texte: #f3eefc;
   --doux: #a99fc4;
@@ -25,6 +25,30 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 body.avec-lecteur { --lecteur-h: 72px; }
+
+/* Image de fond (floutée, sans texte) + voile sombre pour la lisibilité */
+body::before, body::after {
+  content: ''; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+}
+body::before {
+  background: url('fond.jpg') center 20% / cover no-repeat;
+  transform: scale(1.04);
+}
+body::after {
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(20,16,34,.45) 0%, rgba(20,16,34,.72) 40%, rgba(20,16,34,.88) 100%);
+}
+.liste, .menu, .paroles {
+  background: rgba(20, 16, 34, .55);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  border-radius: var(--rayon);
+}
+.liste { padding: 6px; }
+.menu { padding: 0 14px; }
+.menu > :last-child { border-bottom: 0; }
+.carte, .chiffre, .onglets { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.banniere { background: linear-gradient(135deg, rgba(59,42,110,.85), rgba(107,63,143,.8) 55%, rgba(200,144,45,.85)); }
+.lt-titre, h1, h2 { text-shadow: 0 1px 8px rgba(0,0,0,.45); }
 a { color: var(--or); text-decoration: none; }
 .cache { display: none !important; }
 
@@ -82,7 +106,7 @@ input[type=file] { padding: 10px; }
 .accueil-connexion h1 { margin-top: 14px; }
 .onglets { display: flex; background: var(--fond-2); border-radius: 999px; padding: 4px; margin: 22px 0 6px; }
 .onglets button { flex: 1; padding: 10px; border-radius: 999px; border: 0; background: none; color: var(--doux); font: inherit; font-weight: 600; cursor: pointer; }
-.onglets button.actif { background: var(--carte); color: var(--texte); }
+.onglets button.actif { background: #241e3a; color: var(--texte); }
 .form-connexion { text-align: left; }
 
 /* Recherche */
@@ -161,7 +185,7 @@ input[type=file] { padding: 10px; }
 .lecteur {
   position: fixed; left: 0; right: 0; bottom: var(--nav-h); z-index: 25;
   display: flex; align-items: center; gap: 12px; height: 72px; padding: 0 14px;
-  background: #2a2245; border-top: 1px solid var(--ligne);
+  background: rgba(42, 34, 69, .94); backdrop-filter: blur(10px); border-top: 1px solid var(--ligne);
 }
 .lecteur-pochette { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; background: linear-gradient(135deg, #3b2a6e, #c8902d); }
 .lecteur-infos { flex: 1; min-width: 0; }
@@ -189,7 +213,7 @@ input[type=file] { padding: 10px; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.erreur { background: var(--rouge); color: #fff; }
 .modale { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; justify-content: center; }
-.modale-boite { background: var(--fond-2); width: 100%; max-width: 520px; border-radius: 20px 20px 0 0; padding: 22px 18px 28px; max-height: 90vh; overflow: auto; }
+.modale-boite { background: #1d1830; width: 100%; max-width: 520px; border-radius: 20px 20px 0 0; padding: 22px 18px 28px; max-height: 90vh; overflow: auto; }
 @media (min-width: 600px) { .modale { align-items: center; } .modale-boite { border-radius: 20px; } }
 .operateurs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .operateurs label { margin: 0; }
