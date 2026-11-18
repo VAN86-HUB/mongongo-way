@@ -289,8 +289,10 @@ async function urlAudio(t) {
     const rep = await cache.match(`/hors-ligne/${t.id}`);
     if (rep) return URL.createObjectURL(await rep.blob());
   } catch (_) { /* Cache indisponible */ }
-  // 2) Écoute en ligne (lien temporaire)
-  const { data, error } = await sb.storage.from('audio').createSignedUrl(t.audio_path, 60 * 60 * 3);
+  // 2) Écoute en ligne (lien temporaire) : fichier audio, sinon le son de la vidéo
+  const { data, error } = t.audio_path
+    ? await sb.storage.from('audio').createSignedUrl(t.audio_path, 60 * 60 * 3)
+    : await sb.storage.from('videos').createSignedUrl(t.video_path, 60 * 60 * 3);
   if (error) throw error;
   return data.signedUrl;
 }
@@ -309,7 +311,7 @@ function majModeLecture() {
 }
 
 async function jouer(t, depuisHistorique = false) {
-  if (!t?.audio_path) return toast('Fichier audio introuvable.', true);
+  if (!t?.audio_path && !t?.video_path) return toast('Fichier introuvable.', true);
   try {
     if (!depuisHistorique && etat.enCours && etat.enCours.id !== t.id) {
       etat.historique.push(etat.enCours);
@@ -358,7 +360,7 @@ async function suivant(sens) {
     return;
   }
   // Sans abonnement : lecture aléatoire dans tout le catalogue
-  const cat = (await chargerCatalogue()).filter((x) => x.id !== etat.enCours?.id && x.audio_path);
+  const cat = (await chargerCatalogue()).filter((x) => x.id !== etat.enCours?.id && (x.audio_path || x.video_path));
   if (cat.length) jouer(cat[Math.floor(Math.random() * cat.length)]);
 }
 function rafraichirLignes() {
@@ -409,13 +411,7 @@ async function vueTitre(id) {
     hors.audio = !!(await cache.match(cleHL.audio));
     hors.video = !!(await cache.match(cleHL.video));
   } catch (_) {}
-  const boutonFormat = (f) => {
-    const nom = f === 'audio' ? 'l\'audio' : 'la vidéo';
-    const prix = f === 'audio' ? t.prix_telechargement : t.prix_video;
-    if (!achete[f] && estAbonne()) return `<button class="btn secondaire" data-hors="${f}">${hors[f] ? `✓ ${f === 'audio' ? 'Audio' : 'Vidéo'} hors ligne` : `⤓ ${f === 'audio' ? 'Audio' : 'Vidéo'} · inclus`}</button>`;
-    if (!achete[f]) return `<button class="btn secondaire" data-acheter="${f}">⤓ ${f === 'audio' ? 'Audio' : 'Vidéo'} · ${montant(prix, t.devise)}</button>`;
-    return `<button class="btn secondaire" data-hors="${f}">${hors[f] ? `✓ ${f === 'audio' ? 'Audio' : 'Vidéo'} hors ligne` : `⤓ Enregistrer ${nom}`}</button>`;
-  };
+  const formats = t.video_path ? ['audio', 'video'] : ['audio'];
 
   const enCours = etat.enCours?.id === t.id && !audio.paused;
   vue.innerHTML = `
@@ -428,7 +424,7 @@ async function vueTitre(id) {
         <button class="btn" id="btn-ecouter" data-id="${t.id}">${enCours ? '❚❚ Pause' : '▶ Écouter'}</button>
         <button class="btn secondaire" id="btn-like">${monLike ? '<span class="aime">♥</span>' : '♡'} <span id="nb-likes">${nbLikes || 0}</span></button>
       </div>
-      ${t.statut === 'publie' ? `<div class="actions" style="margin-top:0">${boutonFormat('audio')}${t.video_path ? boutonFormat('video') : ''}</div>` : ''}
+      ${t.statut === 'publie' ? `<div class="actions" style="margin-top:0"><button class="btn secondaire" id="btn-telecharger">⤓ Télécharger${formats.every((f) => hors[f]) ? ' · ✓ hors ligne' : ''}</button></div>` : ''}
       <div class="stats"><span>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')} écoutes</span>${t.duree_sec ? `<span>${duree(t.duree_sec)}</span>` : ''}${t.publie_le ? `<span>${dateCourte(t.publie_le)}</span>` : ''}</div>
     </div>
 
@@ -481,20 +477,66 @@ async function vueTitre(id) {
     } catch (err) { erreur(err); b.textContent = '▶ Regarder le clip'; }
   });
 
-  vue.querySelectorAll('[data-acheter]').forEach((b) => b.onclick = () => modalePaiement(t, 'telechargement', b.dataset.acheter));
-  vue.querySelectorAll('[data-hors]').forEach((b) => b.onclick = async () => {
-    const f = b.dataset.hors;
-    if (hors[f]) return toast(f === 'audio' ? 'L\'audio est déjà enregistré sur ce téléphone.' : 'La vidéo est déjà enregistrée sur ce téléphone.');
-    b.disabled = true; b.textContent = 'Enregistrement…';
-    try {
-      const { data, error } = await sb.storage.from(f === 'audio' ? 'audio' : 'videos').download(f === 'audio' ? t.audio_path : t.video_path);
-      if (error) throw error;
-      const cache = await caches.open(CACHE_HORS_LIGNE);
-      await cache.put(cleHL[f], new Response(data, { headers: { 'Content-Type': data.type || (f === 'audio' ? 'audio/mpeg' : 'video/mp4') } }));
-      hors[f] = true; b.textContent = `✓ ${f === 'audio' ? 'Audio' : 'Vidéo'} hors ligne`;
-      toast(f === 'audio' ? 'Audio enregistré : écoutez-le sans internet.' : 'Vidéo enregistrée : regardez-la sans internet.');
-    } catch (err) { erreur(err); b.textContent = f === 'audio' ? '⤓ Enregistrer l\'audio' : '⤓ Enregistrer la vidéo'; }
-    b.disabled = false;
+  // Télécharger : choix Audio (tiré de la vidéo) ou Vidéo
+  $('#btn-telecharger')?.addEventListener('click', () => {
+    const ligne = (f) => {
+      const nom = f === 'audio' ? 'Audio (MP3)' : 'Vidéo (MP4)';
+      const prix = f === 'audio' ? t.prix_telechargement : t.prix_video;
+      const etatF = hors[f] ? '✓ Déjà sur ce téléphone' : achete[f] ? 'Déjà acheté' : estAbonne() ? 'Inclus dans votre abonnement' : montant(prix, t.devise);
+      const note = f === 'audio' && !t.audio_path ? 'Le son est tiré de la vidéo sur votre téléphone' : f === 'audio' ? 'Le son seul, plus léger' : 'Le clip complet';
+      return `<button class="carte" data-format="${f}" style="width:100%;text-align:left;cursor:pointer;color:var(--texte);font:inherit;display:flex;align-items:center;gap:12px">
+        <span style="font-size:24px">${f === 'audio' ? '♪' : '▶'}</span>
+        <span style="flex:1"><b>${nom}</b><br><span class="doux petit">${note}</span></span>
+        <b style="color:var(--or)">${etatF}</b></button>`;
+    };
+    ouvrirModale(`
+      <h2 style="margin-top:0">Télécharger « ${esc(t.titre)} »</h2>
+      <p class="doux petit">Choisissez le format. Le fichier sera enregistré dans l'application pour une écoute sans internet.</p>
+      ${formats.map(ligne).join('')}
+      <div class="progression cache" id="prog-tel"><div></div></div>
+      <p class="doux petit cache" id="etat-tel" style="text-align:center"></p>
+      <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Fermer</button>`);
+    $$('#modale [data-format]').forEach((b) => b.onclick = async () => {
+      const f = b.dataset.format;
+      if (hors[f]) return toast(f === 'audio' ? 'L\'audio est déjà sur ce téléphone.' : 'La vidéo est déjà sur ce téléphone.');
+      if (!achete[f] && !estAbonne()) { fermerModale(); return modalePaiement(t, 'telechargement', f); }
+      $$('#modale [data-format]').forEach((x) => x.disabled = true);
+      const prog = $('#prog-tel'), info = $('#etat-tel');
+      prog.classList.remove('cache'); info.classList.remove('cache');
+      const avancer = (x, msg) => { prog.firstElementChild.style.width = Math.round(x * 100) + '%'; info.textContent = msg; };
+      let verrou = null;
+      try { verrou = await navigator.wakeLock?.request('screen'); } catch (_) {}
+      try {
+        let fichier, typeF;
+        if (f === 'audio' && t.audio_path) {
+          avancer(0.2, 'Téléchargement de l\'audio…');
+          const { data, error } = await sb.storage.from('audio').download(t.audio_path);
+          if (error) throw error;
+          fichier = data; typeF = data.type || 'audio/mpeg';
+        } else {
+          avancer(0.05, 'Téléchargement de la vidéo…');
+          const { data, error } = await sb.storage.from('videos').download(t.video_path);
+          if (error) throw error;
+          if (f === 'video') { fichier = data; typeF = data.type || 'video/mp4'; }
+          else {
+            avancer(0.5, 'Extraction de l\'audio…');
+            const r = await extraireAudio(data, (x) => avancer(0.5 + x * 0.45, `Extraction de l'audio… ${Math.round(x * 100)} %`));
+            fichier = r.fichier; typeF = 'audio/mpeg';
+          }
+        }
+        const cache = await caches.open(CACHE_HORS_LIGNE);
+        await cache.put(cleHL[f], new Response(fichier, { headers: { 'Content-Type': typeF } }));
+        hors[f] = true;
+        avancer(1, f === 'audio' ? '✓ Audio enregistré : écoutez-le sans internet.' : '✓ Vidéo enregistrée : regardez-la sans internet.');
+        toast(info.textContent);
+        setTimeout(() => { fermerModale(); vueTitre(t.id); }, 1200);
+      } catch (err) {
+        erreur(err);
+        avancer(0, 'Échec : ' + (err?.message || err) + ' Réessayez avec une bonne connexion.');
+        $$('#modale [data-format]').forEach((x) => x.disabled = false);
+      }
+      try { verrou?.release(); } catch (_) {}
+    });
   });
 
   $('#form-com')?.addEventListener('submit', async (e) => {
@@ -644,7 +686,7 @@ async function vueArtiste() {
       b.disabled = true;
       const { error } = await sb.from('titres').delete().eq('id', t.id);
       if (error) { b.disabled = false; return erreur(error); }
-      await sb.storage.from('audio').remove([t.audio_path]);
+      if (t.audio_path) await sb.storage.from('audio').remove([t.audio_path]);
       if (t.pochette_path) await sb.storage.from('pochettes').remove([t.pochette_path]);
       if (t.video_path) await sb.storage.from('videos').remove([t.video_path]);
       toast('Brouillon supprimé.');
@@ -693,13 +735,10 @@ async function vueDeposer() {
       <label for="d-genre">Genre</label>
       <select id="d-genre">${GENRES.map((g) => `<option>${g}</option>`).join('')}</select>
 
-      <label for="d-video">Vidéo du chant (MP4, 50 Mo max.)</label>
-      <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp">
-      <p class="doux petit" style="margin:6px 0 0">L'audio est tiré automatiquement de la vidéo. Pas de vidéo ? Déposez seulement le fichier audio ci-dessous.</p>
+      <label for="d-video">Vidéo du chant (MP4, 50 Mo max. après compression)</label>
+      <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp" required>
+      <p class="doux petit" style="margin:6px 0 0">Publiez uniquement la vidéo. Les croyants pourront l'écouter en audio, et la télécharger en audio (le son est tiré de la vidéo) ou en vidéo.</p>
       <div id="bloc-compression" class="carte cache" style="margin:10px 0 0"></div>
-
-      <label for="d-audio">Fichier audio (MP3 ou M4A, 30 Mo max.) — seulement sans vidéo</label>
-      <input id="d-audio" type="file" accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,.mp3,.m4a,.aac">
 
       <label for="d-pochette">Pochette (image carrée, 5 Mo max., facultatif)</label>
       <input id="d-pochette" type="file" accept="image/jpeg,image/png,image/webp">
@@ -767,12 +806,11 @@ async function vueDeposer() {
   $('#form-depot').onsubmit = async (e) => {
     e.preventDefault();
     let fVid = $('#d-video').files[0];
-    let fAudio = $('#d-audio').files[0];
+
     const fImg = $('#d-pochette').files[0];
-    if (!fVid && !fAudio) return toast('Choisissez la vidéo du chant, ou un fichier audio.', true);
+    if (!fVid) return toast('Choisissez la vidéo du chant.', true);
     const compresser = !!fVid && $('input[name=compr]:checked')?.value !== 'non';
     if (fVid && !compresser && fVid.size > 50 * 1024 * 1024) return toast('Vidéo trop lourde (50 Mo max.) : choisissez « Compresser ».', true);
-    if (fAudio && fAudio.size > 30 * 1024 * 1024) return toast('Fichier audio trop lourd (30 Mo max.).', true);
     if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
 
     const bouton = e.submitter; bouton.disabled = true;
@@ -785,7 +823,6 @@ async function vueDeposer() {
     try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
     try {
       let dureeSec = null;
-      let typeA = 'audio/mpeg', extA = 'mp3';
       if (compresser) {
         const avant = fVid.size;
         etape.nom = 'compression de la vidéo';
@@ -802,28 +839,7 @@ async function vueDeposer() {
         }
         if (fVid.size > 50 * 1024 * 1024) throw new Error('Même compressée, la vidéo dépasse 50 Mo. Raccourcissez-la ou compressez-la avec une autre application.');
       }
-      if (fVid) {
-        // L'audio est une copie de la vidéo : extraction en MP3 sur le téléphone
-        etape.nom = 'extraction de l\'audio';
-        avancer(30, 'Extraction de l\'audio…');
-        try {
-          const r = await extraireAudio(fVid, (x) => avancer(30 + Math.round(x * 12), `Extraction de l'audio… ${Math.round(x * 100)} %`));
-          fAudio = r.fichier; dureeSec = r.duree;
-        } catch (err) {
-          console.error(err);
-          throw new Error('Impossible de tirer l\'audio de cette vidéo sur ce téléphone. Réessayez sur un autre appareil, ou ajoutez aussi le fichier audio.');
-        }
-      } else {
-        avancer(10, 'Lecture du fichier…');
-        dureeSec = await lireDuree(fAudio);
-        extA = (fAudio.name.split('.').pop() || 'mp3').toLowerCase();
-        typeA = { mp3: 'audio/mpeg', m4a: 'audio/x-m4a', aac: 'audio/aac', mp4: 'audio/mp4' }[extA] || fAudio.type || 'audio/mpeg';
-      }
-
-      avancer(44, 'Envoi de l\'audio…');
-      const cheminAudio = `${uid}/${horo}.${extA}`;
-      etape.nom = 'envoi de l\'audio';
-      await envoyerFichier('audio', cheminAudio, fAudio, typeA, (x) => avancer(44 + Math.round(x * 10), `Envoi de l'audio… ${Math.round(x * 100)} %`));
+      dureeSec = Math.round((infoVid || await lireInfosVideo(fVid)).duree) || null;
 
       let cheminVid = null;
       if (fVid) {
@@ -856,7 +872,7 @@ async function vueDeposer() {
         album,
         piste,
         paroles: $('#d-paroles').value.trim() || null,
-        audio_path: cheminAudio,
+        audio_path: null,
         video_path: cheminVid,
         pochette_path: cheminImg,
         duree_sec: dureeSec || null,
