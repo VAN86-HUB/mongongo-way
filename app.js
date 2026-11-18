@@ -789,7 +789,7 @@ async function vueDeposer() {
       <div class="petit"><b>${mo.toFixed(1).replace('.', ',')} Mo</b> · ${infoVid.largeur}×${infoVid.hauteur} · ${duree(infoVid.duree)}</div>
       <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:10px 0 0">
         <input type="radio" name="compr" value="oui" ${conseil || tropLourd ? 'checked' : ''} style="width:auto;margin-top:4px">
-        <span><b>Compresser en ${grand > 1280 || infoVid.largeur > 1280 ? '720p' : 'qualité allégée'}</b>${conseil ? ' (recommandé)' : ''}<br><span class="doux petit">Environ ${estime} Mo · plus rapide à envoyer et à regarder</span></span>
+        <span><b>Compresser en ${grand > 1280 || infoVid.largeur > 1280 ? '720p' : 'qualité allégée'}</b>${conseil ? ' (recommandé)' : ''}<br><span class="doux petit">${infoVid.duree && estime < mo ? `Environ ${estime} Mo` : 'Fichier plus léger'} · plus rapide à envoyer et à regarder</span></span>
       </label>
       <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:8px 0 0">
         <input type="radio" name="compr" value="non" ${!conseil && !tropLourd ? 'checked' : ''} ${tropLourd ? 'disabled' : ''} style="width:auto;margin-top:4px">
@@ -839,7 +839,8 @@ async function vueDeposer() {
         }
         if (fVid.size > 50 * 1024 * 1024) throw new Error('Même compressée, la vidéo dépasse 50 Mo. Raccourcissez-la ou compressez-la avec une autre application.');
       }
-      dureeSec = Math.round((infoVid || await lireInfosVideo(fVid)).duree) || null;
+      // Durée lue sur la vidéo finale (après compression), sinon sur l'originale
+      dureeSec = Math.round((await lireInfosVideo(fVid)).duree || infoVid?.duree || 0) || null;
 
       let cheminVid = null;
       if (fVid) {
@@ -848,7 +849,9 @@ async function vueDeposer() {
         const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
         cheminVid = `${uid}/${horo}.${extV}`;
         etape.nom = 'envoi de la vidéo';
-        await envoyerFichier('videos', cheminVid, fVid, typeV, (x) => avancer(55 + Math.round(x * 28), `Envoi de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
+        let dernierPct = 55;
+        avancer(55, `Envoi de la vidéo… 0 % · 0 / ${(fVid.size / 1048576).toFixed(1).replace('.', ',')} Mo (gardez l'écran allumé)`);
+        await envoyerFichier('videos', cheminVid, fVid, typeV, (x, detail) => { if (x === null) return avancer(dernierPct, `Envoi de la vidéo : ${detail}`); dernierPct = 55 + Math.round(x * 28); avancer(dernierPct, `Envoi de la vidéo… ${Math.round(x * 100)} %${detail ? ' · ' + detail : ''}`); });
       }
 
       let cheminImg = null;
@@ -912,19 +915,33 @@ async function envoyerFichier(bucket, chemin, fichier, type, progres) {
   const Upload = tus.Upload || tus.default?.Upload;
   const { data: { session } } = await sb.auth.getSession();
   const ref = new URL(SUPABASE_URL).hostname.split('.')[0];
+  const mo = (o) => (o / 1048576).toFixed(1).replace('.', ',');
   await new Promise((ok, ko) => {
+    let dernier = Date.now(), relances = 0, fini = false;
     const envoi = new Upload(fichier, {
       endpoint: `https://${ref}.storage.supabase.co/storage/v1/upload/resumable`,
       retryDelays: [0, 3000, 5000, 10000, 20000, 30000, 60000],
       headers: { authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_CLE, 'x-upsert': 'true' },
-      uploadDataDuringCreation: true,
+      uploadDataDuringCreation: false,
       removeFingerprintOnSuccess: true,
       metadata: { bucketName: bucket, objectName: chemin, contentType: type, cacheControl: '3600' },
-      chunkSize: 6 * 1024 * 1024,
-      onError: (e) => ko(new Error(traduireErreurEnvoi(e))),
-      onProgress: (fait, total) => progres?.(total ? fait / total : 0),
-      onSuccess: () => ok()
+      chunkSize: 6 * 1024 * 1024, // imposé par Supabase
+      onError: (e) => { fini = true; clearInterval(veille); ko(new Error(traduireErreurEnvoi(e))); },
+      onProgress: (fait, total) => { dernier = Date.now(); progres?.(total ? fait / total : 0, `${mo(fait)} / ${mo(total)} Mo`); },
+      onChunkComplete: () => { dernier = Date.now(); },
+      onSuccess: () => { fini = true; clearInterval(veille); ok(); }
     });
+    // Si rien ne bouge pendant 90 s (réseau bloqué), on relance l'envoi là où il s'est arrêté
+    const veille = setInterval(() => {
+      if (fini || Date.now() - dernier < 90000) return;
+      if (++relances > 5) {
+        fini = true; clearInterval(veille); envoi.abort();
+        return ko(new Error('La connexion est trop faible pour envoyer la vidéo. Essayez en Wi-Fi ou avec un meilleur réseau, puis touchez « Réessayer » : l\'envoi reprendra où il s\'est arrêté.'));
+      }
+      dernier = Date.now();
+      progres?.(null, `connexion lente, nouvelle tentative ${relances}/5…`);
+      envoi.abort().then(() => envoi.start());
+    }, 5000);
     envoi.findPreviousUploads().then((prec) => {
       if (prec.length) envoi.resumeFromPreviousUpload(prec[0]);
       envoi.start();
@@ -946,11 +963,19 @@ function lireInfosVideo(fichier) {
     const v = document.createElement('video');
     const u = URL.createObjectURL(fichier);
     v.preload = 'metadata'; v.muted = true;
-    const fin = (r) => { URL.revokeObjectURL(u); ok(r); };
-    v.onloadedmetadata = () => fin({ largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: isFinite(v.duration) ? v.duration : 0 });
+    let fait = false;
+    const fin = (r) => { if (fait) return; fait = true; URL.revokeObjectURL(u); ok(r); };
+    v.onloadedmetadata = () => {
+      const res = { largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: isFinite(v.duration) ? v.duration : 0 };
+      if (res.duree) return fin(res);
+      // Certaines vidéos (WebM) n'indiquent pas leur durée : on la fait calculer en allant à la fin
+      v.ontimeupdate = () => { res.duree = isFinite(v.duration) ? v.duration : 0; fin(res); };
+      v.currentTime = 1e7;
+      setTimeout(() => fin(res), 6000);
+    };
     v.onerror = () => fin({ largeur: 0, hauteur: 0, duree: 0 });
     v.src = u;
-    setTimeout(() => fin({ largeur: 0, hauteur: 0, duree: 0 }), 8000);
+    setTimeout(() => fin({ largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: 0 }), 10000);
   });
 }
 // Débit visé : environ 28 Mo pour le clip, entre 450 kb/s et 2 Mb/s pour l'image
@@ -959,8 +984,8 @@ function debitVideo(dureeSec) {
   return Math.round(Math.min(2_000_000, Math.max(450_000, (28 * 8 * 1e6) / d - 128_000)));
 }
 function estimerTaille(dureeSec) {
-  const d = Math.max(30, dureeSec || 240);
-  return Math.max(3, Math.round(((debitVideo(d) + 128_000) * d) / 8 / 1048576));
+  const d = dureeSec || 240;
+  return Math.max(1, Math.round(((debitVideo(d) + 128_000) * d) / 8 / 1048576));
 }
 // Taille cible : 720p maximum, proportions gardées, dimensions paires
 function dimensionsCible(l, h) {
@@ -1273,7 +1298,7 @@ async function vueAdmin(onglet = 'artistes') {
           <div class="avatar petit-avatar">${esc((m.nom_complet || '?').charAt(0).toUpperCase())}</div>
           <div style="flex:1;min-width:0">
             <div style="font-weight:600">${esc(m.nom_complet || 'Sans nom')} ${recent(m.inscrit_le) ? '<span class="badge en_attente">Nouveau</span>' : ''}</div>
-            <div class="doux petit">${esc(m.telephone || '')} · ${roles[m.role] || m.role}${m.nom_artiste ? ' (' + esc(m.nom_artiste) + ')' : ''}</div>
+            <div class="doux petit">${esc(m.telephone || '')} · ${m.role === 'admin' ? 'Administrateur' : m.nom_artiste ? 'Artiste' : 'Croyant'}${m.nom_artiste ? ' (' + esc(m.nom_artiste) + ')' : ''}</div>
             <div class="doux petit">Inscrit le ${dateCourte(m.inscrit_le)} · dernière connexion ${quand(m.derniere_connexion)}</div>
             <div class="petit" style="margin-top:4px">${m.abonne_jusqu_au ? `<span class="badge valide">Abonné jusqu'au ${dateCourte(m.abonne_jusqu_au)}</span>` : '<span class="badge">Non abonné</span>'}
               <button class="lien-bouton petit" data-abonner="${m.id}" style="margin-left:8px">${m.abonne_jusqu_au ? 'Prolonger' : 'Activer un abonnement'}</button></div>
