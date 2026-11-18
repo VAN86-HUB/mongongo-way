@@ -226,3 +226,7 @@ input[type=file] { padding: 10px; }
 @keyframes tourne { to { transform: rotate(360deg); } }
 .progression { height: 6px; background: var(--fond); border-radius: 999px; overflow: hidden; margin-top: 12px; }
 .progression div { height: 100%; background: var(--or); width: 0; transition: width .2s; }
+
+/* Soutien */
+.lettre { font-weight: 700; color: var(--or); font-size: 13px; padding: 10px 10px 2px; letter-spacing: 1px; }
+.petit-avatar { width: 48px; height: 48px; font-size: 20px; flex-shrink: 0; }

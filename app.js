@@ -122,7 +122,8 @@ const routes = {
   deposer: vueDeposer,
   profil: vueProfil,
   admin: vueAdmin,
-  achats: vueAchats
+  achats: vueAchats,
+  soutien: vueSoutien
 };
 
 async function router() {
@@ -525,6 +526,11 @@ async function vueArtiste() {
     .select('*, artistes(nom_scene)').eq('artiste_id', a.id).order('cree_le', { ascending: false });
   if (error) throw error;
   const tot = (k) => titres.reduce((s, t) => s + Number(t[k] || 0), 0);
+  const { data: soutiensRecus } = await sb.from('soutiens')
+    .select('montant, montant_artiste, devise, message, cree_le, profils(nom_complet)')
+    .eq('artiste_id', a.id).order('cree_le', { ascending: false }).limit(50);
+  const sr = soutiensRecus || [];
+  const totalSoutien = sr.reduce((s, x) => s + Number(x.montant_artiste || 0), 0);
 
   vue.innerHTML = `
     <h1>${esc(a.nom_scene)} <span class="badge valide" style="vertical-align:middle">Validé</span></h1>
@@ -534,6 +540,12 @@ async function vueArtiste() {
       <div class="chiffre"><b>${tot('nb_telechargements').toLocaleString('fr-FR')}</b><span>téléchargements</span></div>
     </div>
     <a class="btn plein" href="#/deposer" style="margin-top:0">＋ Déposer un nouveau titre</a>
+    <h2>Soutiens reçus <span class="doux petit">(${sr.length})</span></h2>
+    <div class="carte">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="doux">Votre part reçue</span><b style="color:var(--or);font-size:22px">${montant(totalSoutien)}</b></div>
+      ${sr.slice(0, 5).map((x) => `
+        <div class="commentaire"><span class="auteur">${esc(x.profils?.nom_complet || 'Un fidèle')}</span><span class="date">${dateCourte(x.cree_le)} · ${montant(x.montant_artiste, x.devise)} pour vous</span>${x.message ? `<p>« ${esc(x.message)} »</p>` : ''}</div>`).join('') || '<p class="doux petit" style="margin:8px 0 0">Aucun soutien reçu pour le moment. Les croyants peuvent vous soutenir depuis l\'onglet Soutien.</p>'}
+    </div>
     <h2>Mes titres</h2>
     <div id="mes-titres">${titres.length ? titres.map(carteMonTitre).join('') : '<div class="vide">Vous n\'avez encore déposé aucun titre.</div>'}</div>`;
 
@@ -762,6 +774,7 @@ async function vueAdmin(onglet = 'artistes') {
     <div class="onglets" style="margin-top:0">
       <button data-o="artistes" class="${onglet === 'artistes' ? 'actif' : ''}">Artistes (${artistes?.length || 0})</button>
       <button data-o="titres" class="${onglet === 'titres' ? 'actif' : ''}">Titres (${titres?.length || 0})</button>
+      <button data-o="soutiens" class="${onglet === 'soutiens' ? 'actif' : ''}">Soutiens</button>
       <button data-o="tarifs" class="${onglet === 'tarifs' ? 'actif' : ''}">Tarifs</button>
     </div>
     <div id="admin-contenu" style="margin-top:14px"></div>`;
@@ -833,11 +846,33 @@ async function vueAdmin(onglet = 'artistes') {
     };
   }
 
+  if (onglet === 'soutiens') {
+    const { data: sts, error: e2 } = await sb.from('soutiens')
+      .select('montant, montant_artiste, montant_plateforme, devise, message, cree_le, artistes(nom_scene), profils(nom_complet)')
+      .order('cree_le', { ascending: false }).limit(200);
+    if (e2) throw e2;
+    const somme = (k) => (sts || []).reduce((t, x) => t + Number(x[k] || 0), 0);
+    zone.innerHTML = `
+      <div class="chiffres">
+        <div class="chiffre"><b>${montant(somme('montant'))}</b><span>soutiens reçus</span></div>
+        <div class="chiffre"><b>${montant(somme('montant_artiste'))}</b><span>part des artistes</span></div>
+        <div class="chiffre"><b>${montant(somme('montant_plateforme'))}</b><span>part de l'administration</span></div>
+      </div>
+      ${(sts || []).map((x) => `
+        <div class="carte">
+          <h3>${esc(x.artistes?.nom_scene || 'Artiste')} · ${montant(x.montant, x.devise)}</h3>
+          <div class="doux petit">De ${esc(x.profils?.nom_complet || 'un fidèle')} · ${dateCourte(x.cree_le)} · artiste ${montant(x.montant_artiste, x.devise)} · administration ${montant(x.montant_plateforme, x.devise)}</div>
+          ${x.message ? `<p>« ${esc(x.message)} »</p>` : ''}
+        </div>`).join('') || '<div class="vide">Aucun soutien pour le moment.</div>'}`;
+  }
+
   if (onglet === 'tarifs') {
     const libelles = {
       frais_depot_titre: 'Frais de dépôt par titre ($)',
       prix_telechargement_defaut: 'Prix de téléchargement par défaut ($)',
-      part_artiste_pourcent: 'Part de l\'artiste sur un téléchargement (%)'
+      part_artiste_pourcent: 'Part de l\'artiste sur un téléchargement (%)',
+      part_artiste_soutien_pourcent: 'Part de l\'artiste sur un soutien (%) — le reste revient à l\'administration',
+      soutien_minimum: 'Montant minimum d\'un soutien ($)'
     };
     zone.innerHTML = `
       <form id="form-tarifs" class="carte">
@@ -857,6 +892,109 @@ async function vueAdmin(onglet = 'artistes') {
       toast('Tarifs enregistrés.');
     };
   }
+}
+
+// =========================================================
+// SOUTIEN AUX ARTISTES
+// =========================================================
+const sansAccent = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+async function vueSoutien() {
+  chargement();
+  await chargerProfil();
+  const { data, error } = await sb.from('artistes')
+    .select('id, nom_scene, type, biographie, profil_id, titres(count)')
+    .eq('statut', 'valide');
+  if (error) throw error;
+  const artistes = (data || []).sort((a, b) => a.nom_scene.localeCompare(b.nom_scene, 'fr', { sensitivity: 'base' }));
+  const types = { solo: 'Artiste solo', groupe: 'Groupe', chorale: 'Chorale' };
+
+  vue.innerHTML = `
+    <div class="banniere">
+      <h1>Soutenir un artiste</h1>
+      <p>Encouragez les musiciens de Theway RDC par un don Mobile Money.</p>
+    </div>
+    <div class="recherche"><input id="cherche-artiste" type="search" placeholder="Rechercher un artiste, un groupe, une chorale…"></div>
+    <div id="liste-artistes" class="liste"></div>`;
+
+  const dessiner = (liste) => {
+    let lettre = '';
+    $('#liste-artistes').innerHTML = liste.length ? liste.map((a) => {
+      const l = sansAccent(a.nom_scene).charAt(0).toUpperCase();
+      const entete = l !== lettre ? `<div class="lettre">${esc(l)}</div>` : '';
+      lettre = l;
+      const nb = a.titres?.[0]?.count || 0;
+      return `${entete}
+        <div class="ligne-titre" data-artiste="${a.id}">
+          <div class="avatar petit-avatar">${esc(a.nom_scene.charAt(0).toUpperCase())}</div>
+          <div class="lt-infos">
+            <div class="lt-titre">${esc(a.nom_scene)}</div>
+            <div class="lt-artiste">${types[a.type] || ''} · ${nb} titre${nb > 1 ? 's' : ''}</div>
+          </div>
+          <button class="btn petit" data-soutenir="${a.id}">♥ Soutenir</button>
+        </div>`;
+    }).join('') : `<div class="vide"><span class="grand">♥</span>${artistes.length ? 'Aucun artiste ne correspond.' : 'Aucun artiste validé pour le moment.'}</div>`;
+  };
+  dessiner(artistes);
+  $('#cherche-artiste').oninput = (e) => {
+    const q = sansAccent(e.target.value.trim());
+    dessiner(!q ? artistes : artistes.filter((a) => sansAccent(a.nom_scene).includes(q)));
+  };
+  $('#liste-artistes').onclick = (e) => {
+    const l = e.target.closest('[data-artiste]');
+    if (!l) return;
+    const a = artistes.find((x) => x.id === l.dataset.artiste);
+    if (a.profil_id === etat.session.user.id) return toast('Vous ne pouvez pas vous soutenir vous-même.', true);
+    modaleSoutien(a);
+  };
+}
+
+function modaleSoutien(a) {
+  const part = Number(etat.tarifs.part_artiste_soutien_pourcent?.montant ?? 90);
+  const mini = Number(etat.tarifs.soutien_minimum?.montant ?? 1);
+  const choix = [1, 2, 5, 10].filter((v) => v >= mini);
+  let valeur = choix[1] ?? choix[0] ?? mini;
+  ouvrirModale(`
+    <h2 style="margin-top:0">Soutenir ${esc(a.nom_scene)}</h2>
+    ${a.biographie ? `<p class="doux petit">${esc(a.biographie).slice(0, 200)}</p>` : ''}
+    <label>Montant (USD)</label>
+    <div class="operateurs" style="grid-template-columns:repeat(4,1fr)">
+      ${choix.map((v) => `<label><input type="radio" name="mt" value="${v}" ${v === valeur ? 'checked' : ''}><span>${v} $</span></label>`).join('')}
+    </div>
+    <input id="mt-libre" type="number" min="${mini}" step="0.5" placeholder="Autre montant (minimum ${montant(mini)})" style="margin-top:8px">
+    <div class="carte" id="partage" style="margin:14px 0 0"></div>
+    <label for="mot">Un mot pour l'artiste (facultatif)</label>
+    <input id="mot" maxlength="300" placeholder="Ex. Que Dieu bénisse ton ministère !">
+    <label>Payer avec</label>
+    <div class="operateurs">
+      <label><input type="radio" name="op" value="mpesa" checked><span>M-Pesa</span></label>
+      <label><input type="radio" name="op" value="orange_money"><span>Orange Money</span></label>
+      <label><input type="radio" name="op" value="airtel_money"><span>Airtel Money</span></label>
+    </div>
+    <label for="tel-don">Numéro Mobile Money</label>
+    <input id="tel-don" type="tel" inputmode="tel" value="${esc((etat.profil?.telephone || '').replace('+243', '0'))}">
+    <button class="btn plein" id="envoyer-don">Envoyer</button>
+    <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+
+  const maj = () => {
+    const libre = Number($('#mt-libre').value);
+    valeur = libre > 0 ? libre : Number($('input[name=mt]:checked')?.value || 0);
+    const pa = Math.round(valeur * part) / 100;
+    $('#partage').innerHTML = `
+      <div style="display:flex;justify-content:space-between"><span>${esc(a.nom_scene)} reçoit (${part} %)</span><b style="color:var(--or)">${montant(pa)}</b></div>
+      <div style="display:flex;justify-content:space-between" class="doux petit"><span>Administration Mongongo Way (${100 - part} %)</span><span>${montant(valeur - pa)}</span></div>`;
+    $('#envoyer-don').textContent = `Envoyer ${montant(valeur)}`;
+  };
+  $$('input[name=mt]').forEach((r) => r.onchange = () => { $('#mt-libre').value = ''; maj(); });
+  $('#mt-libre').oninput = () => { if ($('#mt-libre').value) $$('input[name=mt]').forEach((r) => r.checked = false); maj(); };
+  maj();
+
+  $('#envoyer-don').onclick = () => {
+    if (!(valeur >= mini)) return toast(`Le soutien minimum est de ${montant(mini)}.`, true);
+    if (!telValide(normaliserTel($('#tel-don').value))) return toast('Numéro Mobile Money invalide.', true);
+    toast('Le paiement Mobile Money sera activé très bientôt. Merci pour votre générosité !');
+    fermerModale();
+  };
 }
 
 // =========================================================
