@@ -105,7 +105,8 @@ input[type=file] { padding: 10px; }
 .accueil-connexion img { width: 88px; height: 88px; border-radius: 22px; }
 .accueil-connexion h1 { margin-top: 14px; }
 .onglets { display: flex; background: var(--fond-2); border-radius: 999px; padding: 4px; margin: 22px 0 6px; }
-.onglets button { flex: 1; padding: 10px; border-radius: 999px; border: 0; background: none; color: var(--doux); font: inherit; font-weight: 600; cursor: pointer; }
+.onglets { overflow-x: auto; }
+.onglets button { flex: 1 0 auto; padding: 10px; border-radius: 999px; border: 0; background: none; color: var(--doux); font: inherit; font-weight: 600; cursor: pointer; }
 .onglets button.actif { background: #241e3a; color: var(--texte); }
 .form-connexion { text-align: left; }
 
@@ -230,3 +231,11 @@ input[type=file] { padding: 10px; }
 /* Soutien */
 .lettre { font-weight: 700; color: var(--or); font-size: 13px; padding: 10px 10px 2px; letter-spacing: 1px; }
 .petit-avatar { width: 48px; height: 48px; font-size: 20px; flex-shrink: 0; }
+
+/* Clips vidéo */
+.badge-clip { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 6px; border-radius: 4px; background: var(--or); color: #1b1405; vertical-align: middle; }
+.clip { position: relative; width: 100%; max-width: 560px; aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden; background: #000; box-shadow: 0 18px 40px rgba(0,0,0,.45); }
+.clip video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.clip-lancer { position: absolute; inset: auto 0 0 0; margin: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: max-content; height: max-content; padding: 12px 22px; border: 0; border-radius: 999px; background: var(--or); color: #1b1405; font: inherit; font-weight: 700; cursor: pointer; }
+
+.lecteur-mode { color: var(--or); font-size: 12px; }
