@@ -239,3 +239,67 @@ input[type=file] { padding: 10px; }
 .clip-lancer { position: absolute; inset: auto 0 0 0; margin: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: max-content; height: max-content; padding: 12px 22px; border: 0; border-radius: 999px; background: var(--or); color: #1b1405; font: inherit; font-weight: 700; cursor: pointer; }
 
 .lecteur-mode { color: var(--or); font-size: 12px; }
+
+.en-ligne { color: var(--vert); font-weight: 600; }
+
+/* Classement des écoutes */
+.rang { width: 28px; flex-shrink: 0; text-align: center; font-weight: 700; color: var(--doux); font-size: 15px; }
+.rang.podium { color: var(--or); font-size: 18px; }
+.compte-auditeurs { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; line-height: 1.1; min-width: 56px; }
+.compte-auditeurs b { color: var(--or); font-size: 16px; }
+.compte-auditeurs span { color: var(--doux); font-size: 11px; }
+
+/* =========================================================
+   VERSION ORDINATEUR (écrans de 900 px et plus)
+   ========================================================= */
+.nav-titre { display: none; }
+@media (min-width: 900px) {
+  :root { --nav-h: 0px; --menu-l: 232px; }
+  body.avec-lecteur { --lecteur-h: 80px; }
+  /* Menu à gauche au lieu de la barre du bas */
+  .nav {
+    top: 0; bottom: 0; left: 0; right: auto; width: var(--menu-l); height: auto;
+    flex-direction: column; justify-content: flex-start; gap: 4px;
+    padding: 88px 14px 24px; border-top: 0; border-right: 1px solid var(--ligne);
+    background: rgba(20, 16, 34, .96); z-index: 15;
+  }
+  .nav a { flex: 0 0 auto; flex-direction: row; justify-content: flex-start; gap: 14px; padding: 12px 16px; border-radius: 12px; font-size: 15px; font-weight: 500; }
+  .nav a .ico { font-size: 18px; width: 22px; text-align: center; }
+  .nav a:hover { background: var(--fond-2); color: var(--texte); }
+  .nav a.actif { background: rgba(232, 176, 75, .12); }
+  .nav-titre { display: block; color: var(--doux); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; padding: 6px 16px 8px; }
+  .entete { padding-left: 28px; z-index: 20; }
+  body:has(#nav:not(.cache)) .vue { margin-left: calc(var(--menu-l) + max(24px, (100vw - var(--menu-l) - 1040px) / 2)); }
+  .vue { max-width: 1040px; padding: 28px 24px calc(var(--lecteur-h) + 40px); }
+  h1 { font-size: 30px; }
+  .banniere { padding: 28px 32px; }
+  .banniere h1 { font-size: 28px; }
+  .recherche { max-width: 520px; }
+  .onglets { max-width: 560px; }
+  /* Listes sur deux colonnes */
+  .liste { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
+  .liste > .vide, .liste > .lettre { grid-column: 1 / -1; }
+  .pochette { width: 60px; height: 60px; }
+  /* Page d'un titre : image à gauche, infos à droite */
+  .detail-tete { display: grid; grid-template-columns: minmax(280px, 460px) 1fr; column-gap: 32px; align-items: center; text-align: left; }
+  .detail-tete > :first-child { grid-row: 1 / span 6; }
+  .detail-tete .pochette { width: 100%; height: auto; aspect-ratio: 1; }
+  .detail-tete .clip { max-width: none; }
+  .detail-tete h1 { margin-top: 0; font-size: 34px; }
+  .detail-tete .actions, .detail-tete .stats { justify-content: flex-start; }
+  .chiffres { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .menu { max-width: 640px; }
+  #form-depot, #form-artiste, .form-connexion { max-width: 640px; }
+  .accueil-connexion { max-width: 460px; margin: 40px auto 0; }
+  /* Lecteur en bas, à droite du menu */
+  .lecteur { left: var(--menu-l); bottom: 0; height: 80px; padding: 0 28px; }
+  .lecteur-infos { max-width: 640px; }
+  .lecteur-barre { height: 6px; }
+  .toast { bottom: calc(var(--lecteur-h) + 24px); left: calc(50% + var(--menu-l) / 2); }
+  .modale-boite { max-width: 620px; }
+}
+@media (min-width: 1500px) {
+  .vue { max-width: 1240px; }
+  body:has(#nav:not(.cache)) .vue { margin-left: calc(var(--menu-l) + max(24px, (100vw - var(--menu-l) - 1240px) / 2)); }
+  .liste { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

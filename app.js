@@ -109,6 +109,29 @@ $('#modale').addEventListener('click', (e) => { if (e.target.id === 'modale' || 
 
 const estAdmin = () => etat.profil?.role === 'admin';
 
+// ---------- Présence (visible uniquement par l'administrateur) ----------
+const estEnLigne = (d) => !!d && Date.now() - new Date(d) < 3 * 60000;
+function momentPrecis(d) {
+  if (!d) return 'jamais';
+  const j = new Date(d), heure = j.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const memeJour = (a, b) => a.toDateString() === b.toDateString();
+  if (memeJour(j, new Date())) return `aujourd'hui à ${heure}`;
+  if (memeJour(j, new Date(Date.now() - 864e5))) return `hier à ${heure}`;
+  return `le ${dateCourte(d)} à ${heure}`;
+}
+let minuteriePresence = null;
+function signalerPresence() {
+  if (!etat.session || document.visibilityState !== 'visible') return;
+  sb.rpc('signaler_presence').then(() => {});
+}
+function demarrerPresence() {
+  clearInterval(minuteriePresence);
+  if (!etat.session) return;
+  signalerPresence();
+  minuteriePresence = setInterval(signalerPresence, 60000);
+}
+document.addEventListener('visibilitychange', signalerPresence);
+
 // ---------- Session & profil ----------
 async function chargerProfil() {
   if (!etat.session) { etat.profil = null; etat.artiste = null; return; }
@@ -220,7 +243,7 @@ async function vueAccueil() {
   chargement();
   const { data: titres, error } = await sb
     .from('titres')
-    .select('id, titre, genre, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, prix_telechargement, prix_video, devise, publie_le, artistes(nom_scene)')
+    .select('id, titre, genre, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, nb_auditeurs, prix_telechargement, prix_video, devise, publie_le, artistes(nom_scene)')
     .eq('statut', 'publie')
     .order('publie_le', { ascending: false })
     .limit(200);
@@ -234,21 +257,40 @@ async function vueAccueil() {
       <p>${estAbonne() ? 'Vous êtes abonné : écoute dans l\'ordre, clips à la suite et téléchargements gratuits.' : 'Écoute gratuite en lecture aléatoire. <a href="#/abonnement" style="color:#fff;text-decoration:underline">Abonnez-vous</a> pour écouter dans l\'ordre et télécharger gratuitement.'}</p>
     </div>
     <div class="recherche"><input id="cherche" type="search" placeholder="Rechercher un titre, un artiste, un genre…"></div>
-    <h2 style="margin-top:6px">Nouveautés</h2>
+    <div class="onglets" style="margin:6px 0 14px">
+      <button data-tri="nouveautes" class="${(vueAccueil.tri || 'nouveautes') === 'nouveautes' ? 'actif' : ''}">Nouveautés</button>
+      <button data-tri="ecoutes" class="${vueAccueil.tri === 'ecoutes' ? 'actif' : ''}">Les plus écoutés</button>
+    </div>
     <div id="liste" class="liste"></div>`;
 
-  const dessinerListe = (liste) => {
+  const parAuditeurs = (a, b) => (b.nb_auditeurs || 0) - (a.nb_auditeurs || 0) || (b.nb_ecoutes || 0) - (a.nb_ecoutes || 0);
+  const dessinerListe = (liste0) => {
+    const classement = vueAccueil.tri === 'ecoutes';
+    const liste = classement ? [...liste0].sort(parAuditeurs) : liste0;
     etat.file = liste;
-    $('#liste').innerHTML = liste.length ? liste.map(ligneTitre).join('') : `
+    $('#liste').innerHTML = liste.length ? liste.map((t, i) => classement ? ligneClassement(t, i) : ligneTitre(t)).join('') : `
       <div class="vide"><span class="grand">♪</span>${titres.length ? 'Aucun résultat.' : 'Aucun titre publié pour le moment.<br>Les premiers chants arrivent bientôt !'}</div>`;
     brancherLignes($('#liste'));
   };
   dessinerListe(titres);
+  $$('[data-tri]').forEach((b) => b.onclick = () => {
+    vueAccueil.tri = b.dataset.tri;
+    $$('[data-tri]').forEach((x) => x.classList.toggle('actif', x === b));
+    $('#cherche').dispatchEvent(new Event('input'));
+  });
   $('#cherche').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     dessinerListe(!q ? titres : titres.filter((t) =>
       [t.titre, t.genre, t.artistes?.nom_scene].some((v) => (v || '').toLowerCase().includes(q))));
   };
+}
+
+// Ligne du classement « Les plus écoutés » : rang + nombre d'auditeurs (un compte = une fois)
+function ligneClassement(t, i) {
+  const n = t.nb_auditeurs || 0;
+  return ligneTitre(t)
+    .replace('<div class="lt-infos">', `<div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div><div class="lt-infos">`)
+    .replace('<button class="lt-play"', `<div class="compte-auditeurs"><b>${n.toLocaleString('fr-FR')}</b><span>auditeur${n > 1 ? 's' : ''}</span></div><button class="lt-play"`);
 }
 
 function ligneTitre(t) {
@@ -425,7 +467,7 @@ async function vueTitre(id) {
         <button class="btn secondaire" id="btn-like">${monLike ? '<span class="aime">♥</span>' : '♡'} <span id="nb-likes">${nbLikes || 0}</span></button>
       </div>
       ${t.statut === 'publie' ? `<div class="actions" style="margin-top:0"><button class="btn secondaire" id="btn-telecharger">⤓ Télécharger${formats.every((f) => hors[f]) ? ' · ✓ hors ligne' : ''}</button></div>` : ''}
-      <div class="stats"><span>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')} écoutes</span>${t.duree_sec ? `<span>${duree(t.duree_sec)}</span>` : ''}${t.publie_le ? `<span>${dateCourte(t.publie_le)}</span>` : ''}</div>
+      <div class="stats"><span>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')} lecture${(t.nb_ecoutes || 0) > 1 ? 's' : ''}</span><span>${(t.nb_auditeurs || 0).toLocaleString('fr-FR')} auditeur${(t.nb_auditeurs || 0) > 1 ? 's' : ''}</span>${t.duree_sec ? `<span>${duree(t.duree_sec)}</span>` : ''}${t.publie_le ? `<span>${dateCourte(t.publie_le)}</span>` : ''}</div>
     </div>
 
     ${t.paroles ? `<h2>Paroles</h2><div class="paroles">${esc(t.paroles)}</div>` : ''}
@@ -704,7 +746,7 @@ function carteMonTitre(t) {
         <h3>${esc(t.titre)}${t.video_path ? ' <span class="badge-clip">CLIP</span>' : ''}</h3>
         <span class="badge ${t.statut}">${STATUTS_TITRE[t.statut]}</span>
         ${t.statut === 'refuse' && t.motif_refus ? `<p class="petit" style="color:var(--rouge)">Motif : ${esc(t.motif_refus)}</p>` : ''}
-        ${t.statut === 'publie' ? `<p class="doux petit" style="margin:6px 0 0">${t.nb_ecoutes} écoutes · ${t.nb_telechargements} téléchargements</p>` : ''}
+        ${t.statut === 'publie' ? `<p class="doux petit" style="margin:6px 0 0">${t.nb_ecoutes} lectures · ${t.nb_auditeurs || 0} auditeurs · ${t.nb_telechargements} téléchargements</p>` : ''}
         ${['brouillon', 'refuse'].includes(t.statut) ? `<p class="doux petit" style="margin:6px 0 0">Frais de dépôt : ${montant(frais?.montant, frais?.devise)}</p>` : ''}
         <div class="boutons">
           <button class="btn secondaire petit" data-action="ecouter" data-id="${t.id}">▶ Écouter</button>
@@ -1192,6 +1234,7 @@ async function vueAdmin(onglet = 'artistes') {
       <button data-o="artistes" class="${onglet === 'artistes' ? 'actif' : ''}">Artistes (${artistes?.length || 0})</button>
       <button data-o="titres" class="${onglet === 'titres' ? 'actif' : ''}">Titres (${titres?.length || 0})</button>
       <button data-o="membres" class="${onglet === 'membres' ? 'actif' : ''}">Membres</button>
+      <button data-o="ecoutes" class="${onglet === 'ecoutes' ? 'actif' : ''}">Écoutes</button>
       <button data-o="soutiens" class="${onglet === 'soutiens' ? 'actif' : ''}">Soutiens</button>
       <button data-o="tarifs" class="${onglet === 'tarifs' ? 'actif' : ''}">Tarifs</button>
     </div>
@@ -1288,8 +1331,9 @@ async function vueAdmin(onglet = 'artistes') {
     };
     const recent = (d) => Date.now() - new Date(d) < 7 * 864e5;
     const liste = membres || [];
+    const nbEnLigne = liste.filter((m) => estEnLigne(m.derniere_activite)).length;
     zone.innerHTML = `
-      <p class="doux petit" style="margin-top:0">${liste.length} membre${liste.length > 1 ? 's' : ''} (vous exclu), du plus récent au plus ancien.</p>
+      <p class="doux petit" style="margin-top:0">${liste.length} membre${liste.length > 1 ? 's' : ''} (vous exclu) · <span class="en-ligne">● ${nbEnLigne} en ligne</span> · les plus récemment actifs en premier.</p>
       <div class="recherche"><input id="cherche-membre" type="search" placeholder="Rechercher un nom ou un numéro…"></div>
       <div id="liste-membres"></div>`;
     const dessiner = (l) => {
@@ -1299,13 +1343,18 @@ async function vueAdmin(onglet = 'artistes') {
           <div style="flex:1;min-width:0">
             <div style="font-weight:600">${esc(m.nom_complet || 'Sans nom')} ${recent(m.inscrit_le) ? '<span class="badge en_attente">Nouveau</span>' : ''}</div>
             <div class="doux petit">${esc(m.telephone || '')} · ${m.role === 'admin' ? 'Administrateur' : m.nom_artiste ? 'Artiste' : 'Croyant'}${m.nom_artiste ? ' (' + esc(m.nom_artiste) + ')' : ''}</div>
-            <div class="doux petit">Inscrit le ${dateCourte(m.inscrit_le)} · dernière connexion ${quand(m.derniere_connexion)}</div>
+            <div class="petit" style="margin-top:2px">${estEnLigne(m.derniere_activite)
+              ? '<span class="en-ligne">● En ligne</span>'
+              : `<span class="doux">Dernière connexion : ${momentPrecis(m.derniere_activite)}${m.derniere_activite ? ` (${quand(m.derniere_activite)})` : ''}</span>`}</div>
+            <div class="doux petit">Inscrit le ${dateCourte(m.inscrit_le)}</div>
             <div class="petit" style="margin-top:4px">${m.abonne_jusqu_au ? `<span class="badge valide">Abonné jusqu'au ${dateCourte(m.abonne_jusqu_au)}</span>` : '<span class="badge">Non abonné</span>'}
               <button class="lien-bouton petit" data-abonner="${m.id}" style="margin-left:8px">${m.abonne_jusqu_au ? 'Prolonger' : 'Activer un abonnement'}</button></div>
           </div>
         </div>`).join('') : '<div class="vide">Aucun membre pour le moment.</div>';
     };
     dessiner(liste);
+    clearTimeout(vueAdmin._rafraichir);
+    vueAdmin._rafraichir = setTimeout(() => { if (location.hash.startsWith('#/admin/membres') && !$('#cherche-membre')?.value && $('#modale').classList.contains('cache')) vueAdmin('membres'); }, 60000);
     $('#liste-membres').onclick = (e) => {
       const b = e.target.closest('[data-abonner]');
       if (!b) return;
@@ -1327,6 +1376,42 @@ async function vueAdmin(onglet = 'artistes') {
     $('#cherche-membre').oninput = (e) => {
       const q = sansAccent(e.target.value.trim());
       dessiner(!q ? liste : liste.filter((m) => sansAccent(m.nom_complet).includes(q) || (m.telephone || '').includes(q)));
+    };
+  }
+
+  if (onglet === 'ecoutes') {
+    const { data: tit, error: e4 } = await sb.from('titres')
+      .select('id, titre, nb_ecoutes, nb_auditeurs, pochette_path, artistes(nom_scene)')
+      .eq('statut', 'publie').order('nb_auditeurs', { ascending: false }).order('nb_ecoutes', { ascending: false }).limit(300);
+    if (e4) throw e4;
+    zone.innerHTML = `
+      <p class="doux petit" style="margin-top:0">Auditeurs = comptes différents (un numéro compté une seule fois). Lectures = toutes les ouvertures. Touchez un titre pour voir qui l'écoute.</p>
+      ${(tit || []).map((t, i) => `
+        <button class="carte" data-auditeurs="${t.id}" style="width:100%;display:flex;gap:12px;align-items:center;text-align:left;cursor:pointer;color:var(--texte);font:inherit">
+          <div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div>
+          ${imgPochette(t.pochette_path)}
+          <div style="flex:1;min-width:0"><b>${esc(t.titre)}</b><div class="doux petit">${esc(t.artistes?.nom_scene || '')}</div></div>
+          <div class="compte-auditeurs"><b>${(t.nb_auditeurs || 0).toLocaleString('fr-FR')}</b><span>auditeurs</span></div>
+          <div class="compte-auditeurs"><b>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')}</b><span>lectures</span></div>
+        </button>`).join('') || '<div class="vide">Aucun titre publié.</div>'}`;
+    zone.onclick = async (e) => {
+      const b = e.target.closest('[data-auditeurs]');
+      if (!b) return;
+      const t = tit.find((x) => x.id === b.dataset.auditeurs);
+      ouvrirModale('<div class="chargement">Chargement…</div>');
+      const { data: aud, error: e5 } = await sb.rpc('ecoutes_du_titre', { p_titre_id: t.id });
+      if (e5) { fermerModale(); return erreur(e5); }
+      ouvrirModale(`
+        <h2 style="margin-top:0">${esc(t.titre)}</h2>
+        <p class="doux petit">${(aud || []).length} auditeur${(aud || []).length > 1 ? 's' : ''} · ${t.nb_ecoutes} lectures · du plus assidu au moins assidu</p>
+        ${(aud || []).map((a, i) => `
+          <div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--ligne)">
+            <div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div>
+            <div style="flex:1;min-width:0"><b>${esc(a.nom_complet || 'Sans nom')}</b>
+              <div class="doux petit">${esc(a.telephone || '')} · ${a.role === 'admin' ? 'Administrateur' : 'Membre'} · dernière écoute ${momentPrecis(a.derniere)}</div></div>
+            <div class="compte-auditeurs"><b>${a.nb}</b><span>fois</span></div>
+          </div>`).join('') || '<p class="doux">Personne n\'a encore écouté ce titre depuis la mise en place du comptage.</p>'}
+        <button class="btn secondaire plein" data-fermer>Fermer</button>`);
     };
   }
 
@@ -1625,6 +1710,7 @@ sb.auth.onAuthStateChange((evenement, session) => {
     premierChargement = false;
     setTimeout(async () => {
       try { await chargerProfil(); } catch (e) { console.error(e); }
+      demarrerPresence();
       if (!session) {
         audio.pause();
         document.body.classList.remove('avec-lecteur');
