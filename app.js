@@ -109,29 +109,6 @@ $('#modale').addEventListener('click', (e) => { if (e.target.id === 'modale' || 
 
 const estAdmin = () => etat.profil?.role === 'admin';
 
-// ---------- Présence (visible uniquement par l'administrateur) ----------
-const estEnLigne = (d) => !!d && Date.now() - new Date(d) < 3 * 60000;
-function momentPrecis(d) {
-  if (!d) return 'jamais';
-  const j = new Date(d), heure = j.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  const memeJour = (a, b) => a.toDateString() === b.toDateString();
-  if (memeJour(j, new Date())) return `aujourd'hui à ${heure}`;
-  if (memeJour(j, new Date(Date.now() - 864e5))) return `hier à ${heure}`;
-  return `le ${dateCourte(d)} à ${heure}`;
-}
-let minuteriePresence = null;
-function signalerPresence() {
-  if (!etat.session || document.visibilityState !== 'visible') return;
-  sb.rpc('signaler_presence').then(() => {});
-}
-function demarrerPresence() {
-  clearInterval(minuteriePresence);
-  if (!etat.session) return;
-  signalerPresence();
-  minuteriePresence = setInterval(signalerPresence, 60000);
-}
-document.addEventListener('visibilitychange', signalerPresence);
-
 // ---------- Session & profil ----------
 async function chargerProfil() {
   if (!etat.session) { etat.profil = null; etat.artiste = null; return; }
@@ -243,7 +220,7 @@ async function vueAccueil() {
   chargement();
   const { data: titres, error } = await sb
     .from('titres')
-    .select('id, titre, genre, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, nb_auditeurs, prix_telechargement, prix_video, devise, publie_le, artistes(nom_scene)')
+    .select('id, titre, genre, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, prix_telechargement, prix_video, devise, publie_le, artistes(nom_scene)')
     .eq('statut', 'publie')
     .order('publie_le', { ascending: false })
     .limit(200);
@@ -257,40 +234,21 @@ async function vueAccueil() {
       <p>${estAbonne() ? 'Vous êtes abonné : écoute dans l\'ordre, clips à la suite et téléchargements gratuits.' : 'Écoute gratuite en lecture aléatoire. <a href="#/abonnement" style="color:#fff;text-decoration:underline">Abonnez-vous</a> pour écouter dans l\'ordre et télécharger gratuitement.'}</p>
     </div>
     <div class="recherche"><input id="cherche" type="search" placeholder="Rechercher un titre, un artiste, un genre…"></div>
-    <div class="onglets" style="margin:6px 0 14px">
-      <button data-tri="nouveautes" class="${(vueAccueil.tri || 'nouveautes') === 'nouveautes' ? 'actif' : ''}">Nouveautés</button>
-      <button data-tri="ecoutes" class="${vueAccueil.tri === 'ecoutes' ? 'actif' : ''}">Les plus écoutés</button>
-    </div>
+    <h2 style="margin-top:6px">Nouveautés</h2>
     <div id="liste" class="liste"></div>`;
 
-  const parAuditeurs = (a, b) => (b.nb_auditeurs || 0) - (a.nb_auditeurs || 0) || (b.nb_ecoutes || 0) - (a.nb_ecoutes || 0);
-  const dessinerListe = (liste0) => {
-    const classement = vueAccueil.tri === 'ecoutes';
-    const liste = classement ? [...liste0].sort(parAuditeurs) : liste0;
+  const dessinerListe = (liste) => {
     etat.file = liste;
-    $('#liste').innerHTML = liste.length ? liste.map((t, i) => classement ? ligneClassement(t, i) : ligneTitre(t)).join('') : `
+    $('#liste').innerHTML = liste.length ? liste.map(ligneTitre).join('') : `
       <div class="vide"><span class="grand">♪</span>${titres.length ? 'Aucun résultat.' : 'Aucun titre publié pour le moment.<br>Les premiers chants arrivent bientôt !'}</div>`;
     brancherLignes($('#liste'));
   };
   dessinerListe(titres);
-  $$('[data-tri]').forEach((b) => b.onclick = () => {
-    vueAccueil.tri = b.dataset.tri;
-    $$('[data-tri]').forEach((x) => x.classList.toggle('actif', x === b));
-    $('#cherche').dispatchEvent(new Event('input'));
-  });
   $('#cherche').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     dessinerListe(!q ? titres : titres.filter((t) =>
       [t.titre, t.genre, t.artistes?.nom_scene].some((v) => (v || '').toLowerCase().includes(q))));
   };
-}
-
-// Ligne du classement « Les plus écoutés » : rang + nombre d'auditeurs (un compte = une fois)
-function ligneClassement(t, i) {
-  const n = t.nb_auditeurs || 0;
-  return ligneTitre(t)
-    .replace('<div class="lt-infos">', `<div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div><div class="lt-infos">`)
-    .replace('<button class="lt-play"', `<div class="compte-auditeurs"><b>${n.toLocaleString('fr-FR')}</b><span>auditeur${n > 1 ? 's' : ''}</span></div><button class="lt-play"`);
 }
 
 function ligneTitre(t) {
@@ -467,7 +425,7 @@ async function vueTitre(id) {
         <button class="btn secondaire" id="btn-like">${monLike ? '<span class="aime">♥</span>' : '♡'} <span id="nb-likes">${nbLikes || 0}</span></button>
       </div>
       ${t.statut === 'publie' ? `<div class="actions" style="margin-top:0"><button class="btn secondaire" id="btn-telecharger">⤓ Télécharger${formats.every((f) => hors[f]) ? ' · ✓ hors ligne' : ''}</button></div>` : ''}
-      <div class="stats"><span>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')} lecture${(t.nb_ecoutes || 0) > 1 ? 's' : ''}</span><span>${(t.nb_auditeurs || 0).toLocaleString('fr-FR')} auditeur${(t.nb_auditeurs || 0) > 1 ? 's' : ''}</span>${t.duree_sec ? `<span>${duree(t.duree_sec)}</span>` : ''}${t.publie_le ? `<span>${dateCourte(t.publie_le)}</span>` : ''}</div>
+      <div class="stats"><span>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')} écoutes</span>${t.duree_sec ? `<span>${duree(t.duree_sec)}</span>` : ''}${t.publie_le ? `<span>${dateCourte(t.publie_le)}</span>` : ''}</div>
     </div>
 
     ${t.paroles ? `<h2>Paroles</h2><div class="paroles">${esc(t.paroles)}</div>` : ''}
@@ -746,7 +704,7 @@ function carteMonTitre(t) {
         <h3>${esc(t.titre)}${t.video_path ? ' <span class="badge-clip">CLIP</span>' : ''}</h3>
         <span class="badge ${t.statut}">${STATUTS_TITRE[t.statut]}</span>
         ${t.statut === 'refuse' && t.motif_refus ? `<p class="petit" style="color:var(--rouge)">Motif : ${esc(t.motif_refus)}</p>` : ''}
-        ${t.statut === 'publie' ? `<p class="doux petit" style="margin:6px 0 0">${t.nb_ecoutes} lectures · ${t.nb_auditeurs || 0} auditeurs · ${t.nb_telechargements} téléchargements</p>` : ''}
+        ${t.statut === 'publie' ? `<p class="doux petit" style="margin:6px 0 0">${t.nb_ecoutes} écoutes · ${t.nb_telechargements} téléchargements</p>` : ''}
         ${['brouillon', 'refuse'].includes(t.statut) ? `<p class="doux petit" style="margin:6px 0 0">Frais de dépôt : ${montant(frais?.montant, frais?.devise)}</p>` : ''}
         <div class="boutons">
           <button class="btn secondaire petit" data-action="ecouter" data-id="${t.id}">▶ Écouter</button>
@@ -831,7 +789,7 @@ async function vueDeposer() {
       <div class="petit"><b>${mo.toFixed(1).replace('.', ',')} Mo</b> · ${infoVid.largeur}×${infoVid.hauteur} · ${duree(infoVid.duree)}</div>
       <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:10px 0 0">
         <input type="radio" name="compr" value="oui" ${conseil || tropLourd ? 'checked' : ''} style="width:auto;margin-top:4px">
-        <span><b>Compresser en ${grand > 1280 || infoVid.largeur > 1280 ? '720p' : 'qualité allégée'}</b>${conseil ? ' (recommandé)' : ''}<br><span class="doux petit">${infoVid.duree && estime < mo ? `Environ ${estime} Mo` : 'Fichier plus léger'} · plus rapide à envoyer et à regarder</span></span>
+        <span><b>Compresser en ${grand > 1280 || infoVid.largeur > 1280 ? '720p' : 'qualité allégée'}</b>${conseil ? ' (recommandé)' : ''}<br><span class="doux petit">Environ ${estime} Mo · plus rapide à envoyer et à regarder</span></span>
       </label>
       <label style="display:flex;gap:10px;align-items:flex-start;color:var(--texte);margin:8px 0 0">
         <input type="radio" name="compr" value="non" ${!conseil && !tropLourd ? 'checked' : ''} ${tropLourd ? 'disabled' : ''} style="width:auto;margin-top:4px">
@@ -881,8 +839,7 @@ async function vueDeposer() {
         }
         if (fVid.size > 50 * 1024 * 1024) throw new Error('Même compressée, la vidéo dépasse 50 Mo. Raccourcissez-la ou compressez-la avec une autre application.');
       }
-      // Durée lue sur la vidéo finale (après compression), sinon sur l'originale
-      dureeSec = Math.round((await lireInfosVideo(fVid)).duree || infoVid?.duree || 0) || null;
+      dureeSec = Math.round((infoVid || await lireInfosVideo(fVid)).duree) || null;
 
       let cheminVid = null;
       if (fVid) {
@@ -891,9 +848,7 @@ async function vueDeposer() {
         const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
         cheminVid = `${uid}/${horo}.${extV}`;
         etape.nom = 'envoi de la vidéo';
-        let dernierPct = 55;
-        avancer(55, `Envoi de la vidéo… 0 % · 0 / ${(fVid.size / 1048576).toFixed(1).replace('.', ',')} Mo (gardez l'écran allumé)`);
-        await envoyerFichier('videos', cheminVid, fVid, typeV, (x, detail) => { if (x === null) return avancer(dernierPct, `Envoi de la vidéo : ${detail}`); dernierPct = 55 + Math.round(x * 28); avancer(dernierPct, `Envoi de la vidéo… ${Math.round(x * 100)} %${detail ? ' · ' + detail : ''}`); });
+        await envoyerFichier('videos', cheminVid, fVid, typeV, (x) => avancer(55 + Math.round(x * 28), `Envoi de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
       }
 
       let cheminImg = null;
@@ -957,33 +912,19 @@ async function envoyerFichier(bucket, chemin, fichier, type, progres) {
   const Upload = tus.Upload || tus.default?.Upload;
   const { data: { session } } = await sb.auth.getSession();
   const ref = new URL(SUPABASE_URL).hostname.split('.')[0];
-  const mo = (o) => (o / 1048576).toFixed(1).replace('.', ',');
   await new Promise((ok, ko) => {
-    let dernier = Date.now(), relances = 0, fini = false;
     const envoi = new Upload(fichier, {
       endpoint: `https://${ref}.storage.supabase.co/storage/v1/upload/resumable`,
       retryDelays: [0, 3000, 5000, 10000, 20000, 30000, 60000],
       headers: { authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_CLE, 'x-upsert': 'true' },
-      uploadDataDuringCreation: false,
+      uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
       metadata: { bucketName: bucket, objectName: chemin, contentType: type, cacheControl: '3600' },
-      chunkSize: 6 * 1024 * 1024, // imposé par Supabase
-      onError: (e) => { fini = true; clearInterval(veille); ko(new Error(traduireErreurEnvoi(e))); },
-      onProgress: (fait, total) => { dernier = Date.now(); progres?.(total ? fait / total : 0, `${mo(fait)} / ${mo(total)} Mo`); },
-      onChunkComplete: () => { dernier = Date.now(); },
-      onSuccess: () => { fini = true; clearInterval(veille); ok(); }
+      chunkSize: 6 * 1024 * 1024,
+      onError: (e) => ko(new Error(traduireErreurEnvoi(e))),
+      onProgress: (fait, total) => progres?.(total ? fait / total : 0),
+      onSuccess: () => ok()
     });
-    // Si rien ne bouge pendant 90 s (réseau bloqué), on relance l'envoi là où il s'est arrêté
-    const veille = setInterval(() => {
-      if (fini || Date.now() - dernier < 90000) return;
-      if (++relances > 5) {
-        fini = true; clearInterval(veille); envoi.abort();
-        return ko(new Error('La connexion est trop faible pour envoyer la vidéo. Essayez en Wi-Fi ou avec un meilleur réseau, puis touchez « Réessayer » : l\'envoi reprendra où il s\'est arrêté.'));
-      }
-      dernier = Date.now();
-      progres?.(null, `connexion lente, nouvelle tentative ${relances}/5…`);
-      envoi.abort().then(() => envoi.start());
-    }, 5000);
     envoi.findPreviousUploads().then((prec) => {
       if (prec.length) envoi.resumeFromPreviousUpload(prec[0]);
       envoi.start();
@@ -1005,19 +946,11 @@ function lireInfosVideo(fichier) {
     const v = document.createElement('video');
     const u = URL.createObjectURL(fichier);
     v.preload = 'metadata'; v.muted = true;
-    let fait = false;
-    const fin = (r) => { if (fait) return; fait = true; URL.revokeObjectURL(u); ok(r); };
-    v.onloadedmetadata = () => {
-      const res = { largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: isFinite(v.duration) ? v.duration : 0 };
-      if (res.duree) return fin(res);
-      // Certaines vidéos (WebM) n'indiquent pas leur durée : on la fait calculer en allant à la fin
-      v.ontimeupdate = () => { res.duree = isFinite(v.duration) ? v.duration : 0; fin(res); };
-      v.currentTime = 1e7;
-      setTimeout(() => fin(res), 6000);
-    };
+    const fin = (r) => { URL.revokeObjectURL(u); ok(r); };
+    v.onloadedmetadata = () => fin({ largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: isFinite(v.duration) ? v.duration : 0 });
     v.onerror = () => fin({ largeur: 0, hauteur: 0, duree: 0 });
     v.src = u;
-    setTimeout(() => fin({ largeur: v.videoWidth || 0, hauteur: v.videoHeight || 0, duree: 0 }), 10000);
+    setTimeout(() => fin({ largeur: 0, hauteur: 0, duree: 0 }), 8000);
   });
 }
 // Débit visé : environ 28 Mo pour le clip, entre 450 kb/s et 2 Mb/s pour l'image
@@ -1026,8 +959,8 @@ function debitVideo(dureeSec) {
   return Math.round(Math.min(2_000_000, Math.max(450_000, (28 * 8 * 1e6) / d - 128_000)));
 }
 function estimerTaille(dureeSec) {
-  const d = dureeSec || 240;
-  return Math.max(1, Math.round(((debitVideo(d) + 128_000) * d) / 8 / 1048576));
+  const d = Math.max(30, dureeSec || 240);
+  return Math.max(3, Math.round(((debitVideo(d) + 128_000) * d) / 8 / 1048576));
 }
 // Taille cible : 720p maximum, proportions gardées, dimensions paires
 function dimensionsCible(l, h) {
@@ -1234,7 +1167,6 @@ async function vueAdmin(onglet = 'artistes') {
       <button data-o="artistes" class="${onglet === 'artistes' ? 'actif' : ''}">Artistes (${artistes?.length || 0})</button>
       <button data-o="titres" class="${onglet === 'titres' ? 'actif' : ''}">Titres (${titres?.length || 0})</button>
       <button data-o="membres" class="${onglet === 'membres' ? 'actif' : ''}">Membres</button>
-      <button data-o="ecoutes" class="${onglet === 'ecoutes' ? 'actif' : ''}">Écoutes</button>
       <button data-o="soutiens" class="${onglet === 'soutiens' ? 'actif' : ''}">Soutiens</button>
       <button data-o="tarifs" class="${onglet === 'tarifs' ? 'actif' : ''}">Tarifs</button>
     </div>
@@ -1331,9 +1263,8 @@ async function vueAdmin(onglet = 'artistes') {
     };
     const recent = (d) => Date.now() - new Date(d) < 7 * 864e5;
     const liste = membres || [];
-    const nbEnLigne = liste.filter((m) => estEnLigne(m.derniere_activite)).length;
     zone.innerHTML = `
-      <p class="doux petit" style="margin-top:0">${liste.length} membre${liste.length > 1 ? 's' : ''} (vous exclu) · <span class="en-ligne">● ${nbEnLigne} en ligne</span> · les plus récemment actifs en premier.</p>
+      <p class="doux petit" style="margin-top:0">${liste.length} membre${liste.length > 1 ? 's' : ''} (vous exclu), du plus récent au plus ancien.</p>
       <div class="recherche"><input id="cherche-membre" type="search" placeholder="Rechercher un nom ou un numéro…"></div>
       <div id="liste-membres"></div>`;
     const dessiner = (l) => {
@@ -1342,19 +1273,14 @@ async function vueAdmin(onglet = 'artistes') {
           <div class="avatar petit-avatar">${esc((m.nom_complet || '?').charAt(0).toUpperCase())}</div>
           <div style="flex:1;min-width:0">
             <div style="font-weight:600">${esc(m.nom_complet || 'Sans nom')} ${recent(m.inscrit_le) ? '<span class="badge en_attente">Nouveau</span>' : ''}</div>
-            <div class="doux petit">${esc(m.telephone || '')} · ${m.role === 'admin' ? 'Administrateur' : m.nom_artiste ? 'Artiste' : 'Croyant'}${m.nom_artiste ? ' (' + esc(m.nom_artiste) + ')' : ''}</div>
-            <div class="petit" style="margin-top:2px">${estEnLigne(m.derniere_activite)
-              ? '<span class="en-ligne">● En ligne</span>'
-              : `<span class="doux">Dernière connexion : ${momentPrecis(m.derniere_activite)}${m.derniere_activite ? ` (${quand(m.derniere_activite)})` : ''}</span>`}</div>
-            <div class="doux petit">Inscrit le ${dateCourte(m.inscrit_le)}</div>
+            <div class="doux petit">${esc(m.telephone || '')} · ${roles[m.role] || m.role}${m.nom_artiste ? ' (' + esc(m.nom_artiste) + ')' : ''}</div>
+            <div class="doux petit">Inscrit le ${dateCourte(m.inscrit_le)} · dernière connexion ${quand(m.derniere_connexion)}</div>
             <div class="petit" style="margin-top:4px">${m.abonne_jusqu_au ? `<span class="badge valide">Abonné jusqu'au ${dateCourte(m.abonne_jusqu_au)}</span>` : '<span class="badge">Non abonné</span>'}
               <button class="lien-bouton petit" data-abonner="${m.id}" style="margin-left:8px">${m.abonne_jusqu_au ? 'Prolonger' : 'Activer un abonnement'}</button></div>
           </div>
         </div>`).join('') : '<div class="vide">Aucun membre pour le moment.</div>';
     };
     dessiner(liste);
-    clearTimeout(vueAdmin._rafraichir);
-    vueAdmin._rafraichir = setTimeout(() => { if (location.hash.startsWith('#/admin/membres') && !$('#cherche-membre')?.value && $('#modale').classList.contains('cache')) vueAdmin('membres'); }, 60000);
     $('#liste-membres').onclick = (e) => {
       const b = e.target.closest('[data-abonner]');
       if (!b) return;
@@ -1376,42 +1302,6 @@ async function vueAdmin(onglet = 'artistes') {
     $('#cherche-membre').oninput = (e) => {
       const q = sansAccent(e.target.value.trim());
       dessiner(!q ? liste : liste.filter((m) => sansAccent(m.nom_complet).includes(q) || (m.telephone || '').includes(q)));
-    };
-  }
-
-  if (onglet === 'ecoutes') {
-    const { data: tit, error: e4 } = await sb.from('titres')
-      .select('id, titre, nb_ecoutes, nb_auditeurs, pochette_path, artistes(nom_scene)')
-      .eq('statut', 'publie').order('nb_auditeurs', { ascending: false }).order('nb_ecoutes', { ascending: false }).limit(300);
-    if (e4) throw e4;
-    zone.innerHTML = `
-      <p class="doux petit" style="margin-top:0">Auditeurs = comptes différents (un numéro compté une seule fois). Lectures = toutes les ouvertures. Touchez un titre pour voir qui l'écoute.</p>
-      ${(tit || []).map((t, i) => `
-        <button class="carte" data-auditeurs="${t.id}" style="width:100%;display:flex;gap:12px;align-items:center;text-align:left;cursor:pointer;color:var(--texte);font:inherit">
-          <div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div>
-          ${imgPochette(t.pochette_path)}
-          <div style="flex:1;min-width:0"><b>${esc(t.titre)}</b><div class="doux petit">${esc(t.artistes?.nom_scene || '')}</div></div>
-          <div class="compte-auditeurs"><b>${(t.nb_auditeurs || 0).toLocaleString('fr-FR')}</b><span>auditeurs</span></div>
-          <div class="compte-auditeurs"><b>${(t.nb_ecoutes || 0).toLocaleString('fr-FR')}</b><span>lectures</span></div>
-        </button>`).join('') || '<div class="vide">Aucun titre publié.</div>'}`;
-    zone.onclick = async (e) => {
-      const b = e.target.closest('[data-auditeurs]');
-      if (!b) return;
-      const t = tit.find((x) => x.id === b.dataset.auditeurs);
-      ouvrirModale('<div class="chargement">Chargement…</div>');
-      const { data: aud, error: e5 } = await sb.rpc('ecoutes_du_titre', { p_titre_id: t.id });
-      if (e5) { fermerModale(); return erreur(e5); }
-      ouvrirModale(`
-        <h2 style="margin-top:0">${esc(t.titre)}</h2>
-        <p class="doux petit">${(aud || []).length} auditeur${(aud || []).length > 1 ? 's' : ''} · ${t.nb_ecoutes} lectures · du plus assidu au moins assidu</p>
-        ${(aud || []).map((a, i) => `
-          <div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--ligne)">
-            <div class="rang ${i < 3 ? 'podium' : ''}">${i + 1}</div>
-            <div style="flex:1;min-width:0"><b>${esc(a.nom_complet || 'Sans nom')}</b>
-              <div class="doux petit">${esc(a.telephone || '')} · ${a.role === 'admin' ? 'Administrateur' : 'Membre'} · dernière écoute ${momentPrecis(a.derniere)}</div></div>
-            <div class="compte-auditeurs"><b>${a.nb}</b><span>fois</span></div>
-          </div>`).join('') || '<p class="doux">Personne n\'a encore écouté ce titre depuis la mise en place du comptage.</p>'}
-        <button class="btn secondaire plein" data-fermer>Fermer</button>`);
     };
   }
 
@@ -1710,7 +1600,6 @@ sb.auth.onAuthStateChange((evenement, session) => {
     premierChargement = false;
     setTimeout(async () => {
       try { await chargerProfil(); } catch (e) { console.error(e); }
-      demarrerPresence();
       if (!session) {
         audio.pause();
         document.body.classList.remove('avec-lecteur');
