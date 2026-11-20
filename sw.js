@@ -1,5 +1,5 @@
 // Service worker Mongongo Way : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v10';
+const VERSION = 'mongongo-v17';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './fond.jpg'
@@ -23,8 +23,12 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Toujours vérifier auprès du serveur s'il y a une nouvelle version (sans attendre le cache du navigateur)
+  const frais = e.request.mode === 'navigate'
+    ? fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
+    : fetch(new Request(e.request, { cache: 'no-cache' }));
   e.respondWith(
-    fetch(e.request)
+    frais
       .then((rep) => {
         const copie = rep.clone();
         caches.open(VERSION).then((c) => c.put(e.request, copie));
