@@ -168,6 +168,7 @@ const routes = {
   achats: vueAchats,
   soutien: vueSoutien,
   a: vuePageArtiste,
+  fil: vueFil,
   abonnement: vueAbonnement
 };
 
@@ -1270,12 +1271,13 @@ async function vueAchats() {
 async function vueAdmin(onglet = 'artistes') {
   if (!estAdmin()) { location.hash = '#/profil'; return; }
   chargement();
-  const [{ data: artistes }, { data: titres }, { data: tarifs }, { count: nbMembres }, { count: nbPublies }] = await Promise.all([
+  const [{ data: artistes }, { data: titres }, { data: tarifs }, { count: nbMembres }, { count: nbPublies }, { data: pubsAttente }] = await Promise.all([
     sb.from('artistes').select('*, profils(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le'),
     sb.from('titres').select('*, artistes(nom_scene)').in('statut', ['en_attente_paiement', 'en_validation']).order('cree_le'),
     sb.from('tarifs').select('*').order('cle'),
     sb.from('profils').select('*', { count: 'exact', head: true }),
-    sb.from('titres').select('*', { count: 'exact', head: true }).eq('statut', 'publie')
+    sb.from('titres').select('*', { count: 'exact', head: true }).eq('statut', 'publie'),
+    sb.from('publications').select('*, profils(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le')
   ]);
 
   vue.innerHTML = `
@@ -1283,11 +1285,12 @@ async function vueAdmin(onglet = 'artistes') {
     <div class="chiffres">
       <div class="chiffre"><b>${nbMembres ?? 0}</b><span>membres</span></div>
       <div class="chiffre"><b>${nbPublies ?? 0}</b><span>titres publiés</span></div>
-      <div class="chiffre"><b>${(artistes?.length || 0) + (titres?.length || 0)}</b><span>à valider</span></div>
+      <div class="chiffre"><b>${(artistes?.length || 0) + (titres?.length || 0) + (pubsAttente?.length || 0)}</b><span>à valider</span></div>
     </div>
     <div class="onglets" style="margin-top:0">
       <button data-o="artistes" class="${onglet === 'artistes' ? 'actif' : ''}">Artistes (${artistes?.length || 0})</button>
       <button data-o="titres" class="${onglet === 'titres' ? 'actif' : ''}">Titres (${titres?.length || 0})</button>
+      <button data-o="publications" class="${onglet === 'publications' ? 'actif' : ''}">Publications (${pubsAttente?.length || 0})</button>
       <button data-o="membres" class="${onglet === 'membres' ? 'actif' : ''}">Membres</button>
       <button data-o="ecoutes" class="${onglet === 'ecoutes' ? 'actif' : ''}">Écoutes</button>
       <button data-o="soutiens" class="${onglet === 'soutiens' ? 'actif' : ''}">Soutiens</button>
@@ -1369,6 +1372,36 @@ async function vueAdmin(onglet = 'artistes') {
       if (error) { (b || cr).disabled = false; return erreur(error); }
       toast(maj.statut === 'publie' ? 'Titre publié : il est visible par tous.' : 'Titre refusé.');
       vueAdmin('titres');
+    };
+  }
+
+  if (onglet === 'publications') {
+    const p0 = pubsAttente || [];
+    zone.innerHTML = p0.length ? p0.map((p) => `
+      <div class="carte" data-mod="${p.id}">
+        <div class="doux petit">${p.type === 'evenement' ? '📅 Événement' : '✦ Publication'} · ${esc(p.profils?.nom_complet || '')} · ${esc(p.profils?.telephone || '')} · ${momentPrecis(p.cree_le)}</div>
+        ${p.type === 'evenement' ? `<h3 style="margin:8px 0 2px">${esc(p.evt_titre)}</h3><div class="doux petit">${dateEvenement(p.evt_date)}${p.evt_lieu ? ' · ' + esc(p.evt_lieu) : ''}</div>` : ''}
+        ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
+        ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="">` : ''}
+        <div class="boutons">
+          <button class="btn petit" data-valider="${p.id}">✓ Valider</button>
+          <button class="btn danger petit" data-refuser="${p.id}">Refuser</button>
+        </div>
+        <div class="motif cache"><label>Motif du refus (visible par l'auteur)</label><input placeholder="Ex. contenu hors sujet">
+          <button class="btn danger petit" style="margin-top:8px" data-confirmer="${p.id}">Confirmer le refus</button></div>
+      </div>`).join('') : '<div class="vide">Aucune publication à valider.</div>';
+    zone.onclick = async (e) => {
+      const r = e.target.closest('[data-refuser]');
+      if (r) return $('.motif', r.closest('[data-mod]')).classList.remove('cache');
+      const v = e.target.closest('[data-valider]'), c = e.target.closest('[data-confirmer]');
+      const b = v || c; if (!b) return;
+      const carte = b.closest('[data-mod]');
+      const maj = v ? { statut: 'publie', motif_refus: null } : { statut: 'refuse', motif_refus: $('.motif input', carte).value.trim() || null };
+      b.disabled = true;
+      const { error } = await sb.from('publications').update(maj).eq('id', carte.dataset.mod);
+      if (error) { b.disabled = false; return erreur(error); }
+      toast(v ? 'Publication validée : visible par tous.' : 'Publication refusée.');
+      vueAdmin('publications');
     };
   }
 
@@ -1646,6 +1679,230 @@ async function vueAbonnement() {
     const k = b.dataset.formule;
     modalePaiement({ titre: `Abonnement ${FORMULES[k].nom}`, prix_telechargement: prixFormule(k), devise: 'USD' }, 'abonnement');
   });
+}
+
+// =========================================================
+// FIL : ACTUALITÉS ET ÉVÉNEMENTS (validés par l'administrateur)
+// =========================================================
+const urlImagePub = (p) => (p ? sb.storage.from('publications').getPublicUrl(p).data.publicUrl : '');
+const dateEvenement = (d) => new Date(d).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' à ' + new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+const texteRiche = (t) => esc(t || '').replace(/\n/g, '<br>');
+
+async function vueFil(onglet = 'actualites') {
+  chargement();
+  const uid = etat.session.user.id;
+  const type = onglet === 'evenements' ? 'evenement' : 'message';
+  const [{ data: pubs, error }, { data: mesJaimes }] = await Promise.all([
+    sb.from('publications').select('*, profils(nom_complet)').eq('type', type)
+      .or(`statut.eq.publie,auteur_id.eq.${uid}`)
+      .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
+    sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid)
+  ]);
+  if (error) throw error;
+  const aimes = new Set((mesJaimes || []).map((x) => x.publication_id));
+  const maintenant = Date.now();
+  let liste = pubs || [];
+  let html = '';
+  if (type === 'message') {
+    // Mes publications en attente d'abord, puis le fil du plus récent au plus ancien
+    liste = [...liste.filter((p) => p.statut !== 'publie'), ...liste.filter((p) => p.statut === 'publie').sort((a, b) => new Date(b.publie_le) - new Date(a.publie_le))];
+    html = liste.map((p) => cartePublication(p, aimes)).join('') || '<div class="vide"><span class="grand">✦</span>Aucune publication pour le moment. Soyez le premier à partager !</div>';
+  } else {
+    const aVenir = liste.filter((p) => new Date(p.evt_date).getTime() >= maintenant - 6 * 3600e3);
+    const passes = liste.filter((p) => new Date(p.evt_date).getTime() < maintenant - 6 * 3600e3).reverse();
+    html = (aVenir.map((p) => carteEvenement(p, aimes)).join('') || '<div class="vide"><span class="grand">📅</span>Aucun événement à venir pour le moment.</div>')
+      + (passes.length ? `<h2>Événements passés</h2>${passes.map((p) => carteEvenement(p, aimes, true)).join('')}` : '');
+  }
+
+  vue.innerHTML = `
+    <div class="onglets" style="margin-top:0">
+      <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités</button>
+      <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements</button>
+    </div>
+    ${type === 'message' ? `
+    <form class="carte composeur" id="form-pub">
+      <div style="display:flex;gap:12px">
+        <div class="avatar petit-avatar">${esc((etat.profil?.nom_complet || '?').charAt(0).toUpperCase())}</div>
+        <textarea id="pub-texte" maxlength="3000" placeholder="Partagez une nouvelle, un témoignage, une parole…" style="min-height:70px"></textarea>
+      </div>
+      <img id="pub-apercu" class="pub-image cache" alt="">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px">
+        <label class="lien-photo">📷 Photo<input type="file" id="pub-image" accept="image/jpeg,image/png,image/webp" class="cache"></label>
+        <button class="btn petit" type="submit">Publier</button>
+      </div>
+      ${estAdmin() ? '' : '<p class="doux petit" style="margin:8px 0 0">Votre publication sera visible par tous après validation par l\'administrateur.</p>'}
+    </form>` : `
+    <button class="btn plein" id="btn-annoncer" style="margin:0 0 14px">＋ Annoncer un événement</button>
+    <form class="carte cache" id="form-evt">
+      <h3>Nouvel événement</h3>
+      <label for="evt-titre">Titre</label><input id="evt-titre" required maxlength="150" placeholder="Ex. Grand concert de louange">
+      <div class="deux-col">
+        <div><label for="evt-date">Date et heure</label><input id="evt-date" type="datetime-local" required></div>
+        <div><label for="evt-lieu">Lieu</label><input id="evt-lieu" maxlength="200" placeholder="Ex. Église Theway, Kinshasa"></div>
+      </div>
+      <label for="evt-texte">Description</label><textarea id="evt-texte" maxlength="3000" placeholder="Programme, artistes, entrée…"></textarea>
+      <label for="evt-image">Affiche (facultatif, 5 Mo max.)</label><input id="evt-image" type="file" accept="image/jpeg,image/png,image/webp">
+      <button class="btn plein" type="submit">${estAdmin() ? 'Publier l\'événement' : 'Envoyer pour validation'}</button>
+    </form>`}
+    <div id="fil">${html}</div>`;
+
+  $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/fil/${b.dataset.fil}`; });
+
+  // Envoi d'une image de publication
+  const envoyerImage = async (f) => {
+    if (!f) return null;
+    if (f.size > 5 * 1024 * 1024) throw new Error('Image trop lourde (5 Mo max.).');
+    const chemin = `${uid}/${Date.now()}.${(f.name.split('.').pop() || 'jpg').toLowerCase()}`;
+    const { error: e } = await sb.storage.from('publications').upload(chemin, f, { contentType: f.type, upsert: true });
+    if (e) throw e;
+    return chemin;
+  };
+  const apresEnvoi = () => toast(estAdmin() ? 'Publié.' : 'Envoyé ! Visible par tous après validation de l\'administrateur.');
+
+  $('#pub-image')?.addEventListener('change', (e) => {
+    const f = e.target.files[0], im = $('#pub-apercu');
+    if (f) { im.src = URL.createObjectURL(f); im.classList.remove('cache'); } else im.classList.add('cache');
+  });
+  $('#form-pub')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const texte = $('#pub-texte').value.trim(), f = $('#pub-image').files[0];
+    if (!texte && !f) return toast('Écrivez un message ou ajoutez une photo.', true);
+    const b = e.submitter; b.disabled = true;
+    try {
+      const image_path = await envoyerImage(f);
+      const { error: e2 } = await sb.from('publications').insert({ auteur_id: uid, type: 'message', texte: texte || null, image_path });
+      if (e2) throw e2;
+      apresEnvoi(); vueFil('actualites');
+    } catch (err) { erreur(err); b.disabled = false; }
+  });
+  $('#btn-annoncer')?.addEventListener('click', () => { $('#form-evt').classList.toggle('cache'); });
+  $('#form-evt')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const b = e.submitter; b.disabled = true;
+    try {
+      const d = new Date($('#evt-date').value);
+      if (isNaN(d)) throw new Error('Choisissez la date et l\'heure.');
+      const image_path = await envoyerImage($('#evt-image').files[0]);
+      const { error: e2 } = await sb.from('publications').insert({
+        auteur_id: uid, type: 'evenement', evt_titre: $('#evt-titre').value.trim(), evt_date: d.toISOString(),
+        evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, image_path
+      });
+      if (e2) throw e2;
+      apresEnvoi(); vueFil('evenements');
+    } catch (err) { erreur(err); b.disabled = false; }
+  });
+
+  // J'aime, commentaires, suppression
+  $('#fil').onclick = async (e) => {
+    const carte = e.target.closest('[data-pub]');
+    if (!carte) return;
+    const id = carte.dataset.pub;
+    const p = liste.find((x) => x.id === id);
+    if (e.target.closest('[data-jaime]')) {
+      if (p.statut !== 'publie') return toast('Disponible après validation.');
+      const b = e.target.closest('[data-jaime]'); b.disabled = true;
+      const r = aimes.has(id)
+        ? await sb.from('publication_jaimes').delete().eq('publication_id', id).eq('profil_id', uid)
+        : await sb.from('publication_jaimes').insert({ publication_id: id, profil_id: uid });
+      b.disabled = false;
+      if (r.error) return erreur(r.error);
+      if (aimes.has(id)) { aimes.delete(id); p.nb_jaime = Math.max(0, p.nb_jaime - 1); } else { aimes.add(id); p.nb_jaime++; }
+      b.innerHTML = `${aimes.has(id) ? '<span class="aime">♥</span>' : '♡'} ${p.nb_jaime}`;
+    }
+    if (e.target.closest('[data-com]')) {
+      if (p.statut !== 'publie') return toast('Disponible après validation.');
+      const zone = $('.zone-com', carte);
+      if (!zone.classList.toggle('cache')) await chargerCommentaires(p, zone);
+    }
+    if (e.target.closest('[data-suppr-pub]')) {
+      ouvrirModale(`<h2 style="margin-top:0">Supprimer cette publication ?</h2><p class="doux">Elle sera retirée du fil pour tout le monde.</p>
+        <button class="btn danger plein" id="ok-suppr">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+      $('#ok-suppr').onclick = async () => {
+        const { error: e3 } = await sb.from('publications').delete().eq('id', id);
+        if (e3) return erreur(e3);
+        if (p.image_path) await sb.storage.from('publications').remove([p.image_path]);
+        fermerModale(); toast('Publication supprimée.'); carte.remove();
+      };
+    }
+  };
+}
+
+async function chargerCommentaires(p, zone) {
+  zone.innerHTML = '<div class="doux petit">Chargement…</div>';
+  const { data, error } = await sb.from('publication_commentaires').select('id, contenu, cree_le, profil_id, profils(nom_complet)')
+    .eq('publication_id', p.id).order('cree_le', { ascending: true }).limit(200);
+  if (error) return erreur(error);
+  const uid = etat.session.user.id;
+  const ligne = (c) => `<div class="commentaire"><span class="auteur">${esc(c.profils?.nom_complet || 'Membre')}</span><span class="date">${momentPrecis(c.cree_le)}</span>
+    ${c.profil_id === uid || estAdmin() ? `<button class="lien-bouton petit" style="float:right;color:var(--doux)" data-suppr-com="${c.id}">Supprimer</button>` : ''}<p>${texteRiche(c.contenu)}</p></div>`;
+  zone.innerHTML = `${(data || []).map(ligne).join('')}
+    <form class="form-commentaire"><input maxlength="1000" placeholder="Écrire un commentaire…" required><button class="btn petit" type="submit">Envoyer</button></form>`;
+  $('form', zone).onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = $('input', zone), contenu = inp.value.trim();
+    if (!contenu) return;
+    const { data: c, error: e2 } = await sb.from('publication_commentaires').insert({ publication_id: p.id, profil_id: uid, contenu })
+      .select('id, contenu, cree_le, profil_id, profils(nom_complet)').single();
+    if (e2) return erreur(e2);
+    inp.value = '';
+    $('form', zone).insertAdjacentHTML('beforebegin', ligne(c));
+    p.nb_commentaires++;
+    const b = zone.closest('[data-pub]').querySelector('[data-com]'); if (b) b.textContent = `💬 ${p.nb_commentaires}`;
+  };
+  zone.onclick = async (e) => {
+    const b = e.target.closest('[data-suppr-com]');
+    if (!b) return;
+    const { error: e3 } = await sb.from('publication_commentaires').delete().eq('id', b.dataset.supprCom);
+    if (e3) return erreur(e3);
+    b.closest('.commentaire').remove();
+  };
+}
+
+function enteteAuteur(p) {
+  return `<div class="pub-entete">
+    <div class="avatar petit-avatar">${esc((p.profils?.nom_complet || '?').charAt(0).toUpperCase())}</div>
+    <div style="flex:1;min-width:0"><b>${esc(p.profils?.nom_complet || 'Membre')}</b><div class="doux petit">${momentPrecis(p.publie_le || p.cree_le)}</div></div>
+    ${boutonSupprPub(p)}
+  </div>
+  ${badgeStatutPub(p)}`;
+}
+const boutonSupprPub = (p) => (p.auteur_id === etat.session.user.id || estAdmin() ? `<button class="lien-bouton petit" style="color:var(--doux)" data-suppr-pub title="Supprimer">🗑</button>` : '');
+function badgeStatutPub(p) {
+  if (p.statut === 'en_attente') return '<div class="badge en_attente" style="margin-top:8px">En attente de validation · visible par vous seul</div>';
+  if (p.statut === 'refuse') return `<div class="badge refuse" style="margin-top:8px">Refusée${p.motif_refus ? ' : ' + esc(p.motif_refus) : ''}</div>`;
+  return '';
+}
+function piedReactions(p, aimes) {
+  return `<div class="pub-actions">
+      <button class="btn secondaire petit" data-jaime>${aimes.has(p.id) ? '<span class="aime">♥</span>' : '♡'} ${p.nb_jaime}</button>
+      <button class="btn secondaire petit" data-com>💬 ${p.nb_commentaires}</button>
+    </div>
+    <div class="zone-com cache"></div>`;
+}
+function cartePublication(p, aimes) {
+  return `<article class="carte pub" data-pub="${p.id}">
+    ${enteteAuteur(p)}
+    ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
+    ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="" loading="lazy">` : ''}
+    ${piedReactions(p, aimes)}
+  </article>`;
+}
+function carteEvenement(p, aimes, passe = false) {
+  const d = new Date(p.evt_date);
+  return `<article class="carte pub evenement ${passe ? 'passe' : ''}" data-pub="${p.id}">
+    ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="" loading="lazy">` : ''}
+    <div style="display:flex;gap:14px;align-items:flex-start;margin-top:${p.image_path ? '12px' : '0'}">
+      <div class="date-evt"><b>${d.getDate()}</b><span>${d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}</span></div>
+      <div style="flex:1;min-width:0">
+        <h3 style="margin:0">${esc(p.evt_titre)}</h3>
+        <div class="doux petit" style="margin-top:4px">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? `<br>📍 ${esc(p.evt_lieu)}` : ''}</div>
+      </div>
+    </div>
+    ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
+    <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">Annoncé par ${esc(p.profils?.nom_complet || 'un membre')}${boutonSupprPub(p)}</div>
+    ${badgeStatutPub(p)}
+    ${piedReactions(p, aimes)}
+  </article>`;
 }
 
 // =========================================================
