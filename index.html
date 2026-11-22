@@ -12,7 +12,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20">
+  <link rel="stylesheet" href="style.css?v=21">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('mw-theme')==='jour'?'jour':'nuit'}catch(e){document.documentElement.dataset.theme='nuit'}</script>
 </head>
 <body>
   <header class="entete">
@@ -20,6 +21,10 @@
       <img src="icon-192.png" alt="" width="32" height="32">
       <span>Mongongo <b>Way</b></span>
     </a>
+    <div class="entete-actions">
+      <button id="btn-theme" class="rond" type="button" title="Passer en mode jour">☀</button>
+      <a id="btn-messages" class="rond" href="#/messages" title="Messages">✉<span id="badge-msg" class="pastille cache">0</span></a>
+    </div>
   </header>
 
   <main id="vue" class="vue" aria-live="polite"></main>
@@ -48,6 +53,6 @@
   <div id="toast" class="toast" role="status"></div>
   <div id="modale" class="modale cache"><div class="modale-boite" id="modale-boite"></div></div>
 
-  <script type="module" src="app.js?v=20"></script>
+  <script type="module" src="app.js?v=21"></script>
 </body>
 </html>

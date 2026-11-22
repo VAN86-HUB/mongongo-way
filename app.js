@@ -169,6 +169,8 @@ const routes = {
   soutien: vueSoutien,
   a: vuePageArtiste,
   fil: vueFil,
+  messages: vueMessages,
+  membre: vueMembre,
   abonnement: vueAbonnement
 };
 
@@ -176,9 +178,13 @@ async function router() {
   const [nom, param] = (location.hash.replace(/^#\//, '') || 'accueil').split('/');
   const connecte = !!etat.session;
   $('#nav').classList.toggle('cache', !connecte);
+  $('#btn-messages')?.classList.toggle('cache', !connecte);
   if (!connecte && nom !== 'connexion') { location.hash = '#/connexion'; return; }
   if (connecte && nom === 'connexion') { location.hash = '#/accueil'; return; }
   $$('#nav a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom || (nom === 'deposer' && a.dataset.route === 'artiste') || (['admin', 'achats', 'abonnement'].includes(nom) && a.dataset.route === 'profil')));
+  $('#btn-messages')?.classList.toggle('actif', nom === 'messages');
+  clearInterval(minuterieConversation);
+  majBadgeMessages();
   window.scrollTo(0, 0);
   try {
     await (routes[nom] || vueAccueil)(param);
@@ -660,7 +666,7 @@ function commentaireHtml(c) {
   const peutSuppr = c.profil_id === etat.session.user.id || estAdmin();
   return `
     <div class="commentaire">
-      <span class="auteur">${esc(c.profils?.nom_complet || 'Membre')}</span><span class="date">${dateCourte(c.cree_le)}</span>
+      <a class="auteur" href="#/membre/${c.profil_id}">${esc(c.profils?.nom_complet || 'Membre')}</a><span class="date">${dateCourte(c.cree_le)}</span>
       ${peutSuppr ? `<button class="lien-bouton petit" style="float:right;color:var(--doux)" data-suppr="${c.id}">Supprimer</button>` : ''}
       <p>${esc(c.contenu)}</p>
     </div>`;
@@ -1218,10 +1224,12 @@ async function vueProfil() {
     </div>
     <div class="menu">
       <a href="#/abonnement">${estAbonne() ? `Mon abonnement · jusqu'au ${dateCourte(etat.finAbo)}` : 'S\'abonner'}</a>
+      <a href="#/messages">Mes messages</a>
       <a href="#/achats">Mes téléchargements</a>
       <a href="#/artiste">${etat.artiste ? 'Mon espace artiste' : 'Devenir artiste'}</a>
       ${estAdmin() ? '<a href="#/admin">Administration</a>' : ''}
       <button id="modif-nom">Modifier mon nom</button>
+      <button id="choix-theme">Apparence <span class="doux" id="theme-actuel">${themeActuel() === 'jour' ? '☀ Jour' : '☾ Nuit'}</span></button>
       <button id="installer" class="cache">Installer l'application sur ce téléphone</button>
       <button id="deconnexion" style="color:var(--rouge)">Se déconnecter</button>
     </div>
@@ -1232,6 +1240,7 @@ async function vueProfil() {
       Conçue et développée par <b style="color:var(--texte)">Ingénieur Van MUFWAR</b>
     </div>`;
 
+  $('#choix-theme').onclick = () => { basculerTheme(); $('#theme-actuel').textContent = themeActuel() === 'jour' ? '☀ Jour' : '☾ Nuit'; };
   $('#deconnexion').onclick = async () => { audio.pause(); await sb.auth.signOut(); };
   $('#modif-nom').onclick = () => {
     ouvrirModale(`
@@ -1382,7 +1391,7 @@ async function vueAdmin(onglet = 'artistes') {
         <div class="doux petit">${p.type === 'evenement' ? '📅 Événement' : '✦ Publication'} · ${esc(p.profils?.nom_complet || '')} · ${esc(p.profils?.telephone || '')} · ${momentPrecis(p.cree_le)}</div>
         ${p.type === 'evenement' ? `<h3 style="margin:8px 0 2px">${esc(p.evt_titre)}</h3><div class="doux petit">${dateEvenement(p.evt_date)}${p.evt_lieu ? ' · ' + esc(p.evt_lieu) : ''}</div>` : ''}
         ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
-        ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="">` : ''}
+        ${galerie(p)}
         <div class="boutons">
           <button class="btn petit" data-valider="${p.id}">✓ Valider</button>
           <button class="btn danger petit" data-refuser="${p.id}">Refuser</button>
@@ -1587,7 +1596,7 @@ async function vuePageArtiste(id) {
     <div class="actions" style="justify-content:flex-start">
       <button class="btn" data-tout="audio">▶ Tout écouter dans l'ordre${verrou}</button>
       ${ordre.some((t) => t.video_path) ? `<button class="btn secondaire" data-tout="video">▶ Clips à la suite${verrou}</button>` : ''}
-      ${a.profil_id !== etat.session.user.id ? '<button class="btn secondaire" data-soutenir>♥ Soutenir</button>' : ''}
+      ${a.profil_id !== etat.session.user.id ? `<button class="btn secondaire" data-soutenir>♥ Soutenir</button><a class="btn secondaire" href="#/messages/${a.profil_id}">✉ Message</a>` : ''}
     </div>
     ${!abo ? '<p class="doux petit">Sans abonnement, la lecture se poursuit au hasard. <a href="#/abonnement">S\'abonner</a> pour écouter dans l\'ordre et enchaîner les clips.</p>' : ''}
     ${noms.map((n) => `
@@ -1725,9 +1734,9 @@ async function vueFil(onglet = 'actualites') {
         <div class="avatar petit-avatar">${esc((etat.profil?.nom_complet || '?').charAt(0).toUpperCase())}</div>
         <textarea id="pub-texte" maxlength="3000" placeholder="Partagez une nouvelle, un témoignage, une parole…" style="min-height:70px"></textarea>
       </div>
-      <img id="pub-apercu" class="pub-image cache" alt="">
+      <div id="pub-apercu" class="apercu-photos"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px">
-        <label class="lien-photo">📷 Photo<input type="file" id="pub-image" accept="image/jpeg,image/png,image/webp" class="cache"></label>
+        <label class="lien-photo">📷 Photos<input type="file" id="pub-image" accept="image/*" multiple class="cache"></label>
         <button class="btn petit" type="submit">Publier</button>
       </div>
       ${estAdmin() ? '' : '<p class="doux petit" style="margin:8px 0 0">Votre publication sera visible par tous après validation par l\'administrateur.</p>'}
@@ -1741,55 +1750,60 @@ async function vueFil(onglet = 'actualites') {
         <div><label for="evt-lieu">Lieu</label><input id="evt-lieu" maxlength="200" placeholder="Ex. Église Theway, Kinshasa"></div>
       </div>
       <label for="evt-texte">Description</label><textarea id="evt-texte" maxlength="3000" placeholder="Programme, artistes, entrée…"></textarea>
-      <label for="evt-image">Affiche (facultatif, 5 Mo max.)</label><input id="evt-image" type="file" accept="image/jpeg,image/png,image/webp">
+      <label>Affiche et photos (facultatif, ${MAX_PHOTOS} max.)</label>
+      <label class="lien-photo" style="display:inline-block;margin:0">📷 Choisir des photos<input type="file" id="evt-image" accept="image/*" multiple class="cache"></label>
+      <div id="evt-apercu" class="apercu-photos"></div>
       <button class="btn plein" type="submit">${estAdmin() ? 'Publier l\'événement' : 'Envoyer pour validation'}</button>
     </form>`}
     <div id="fil">${html}</div>`;
 
   $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/fil/${b.dataset.fil}`; });
 
-  // Envoi d'une image de publication
-  const envoyerImage = async (f) => {
-    if (!f) return null;
-    if (f.size > 5 * 1024 * 1024) throw new Error('Image trop lourde (5 Mo max.).');
-    const chemin = `${uid}/${Date.now()}.${(f.name.split('.').pop() || 'jpg').toLowerCase()}`;
-    const { error: e } = await sb.storage.from('publications').upload(chemin, f, { contentType: f.type, upsert: true });
-    if (e) throw e;
-    return chemin;
+  // Photos choisies (une ou plusieurs), réduites avant envoi
+  const photosPub = selecteurPhotos($('#pub-image'), $('#pub-apercu'));
+  const photosEvt = selecteurPhotos($('#evt-image'), $('#evt-apercu'));
+  const envoyerImages = async (fichiers, bouton) => {
+    const chemins = [];
+    for (let i = 0; i < fichiers.length; i++) {
+      if (fichiers.length > 1) bouton.textContent = `Envoi des photos ${i + 1}/${fichiers.length}…`;
+      const f = await reduireImage(fichiers[i]);
+      if (f.size > 5 * 1024 * 1024) throw new Error('Une photo est trop lourde (5 Mo max.).');
+      const chemin = `${uid}/${Date.now()}-${i}.${f.type === 'image/png' ? 'png' : f.type === 'image/webp' ? 'webp' : 'jpg'}`;
+      const { error: e } = await sb.storage.from('publications').upload(chemin, f, { contentType: f.type || 'image/jpeg', upsert: true });
+      if (e) { if (chemins.length) sb.storage.from('publications').remove(chemins); throw e; }
+      chemins.push(chemin);
+    }
+    return chemins;
   };
   const apresEnvoi = () => toast(estAdmin() ? 'Publié.' : 'Envoyé ! Visible par tous après validation de l\'administrateur.');
 
-  $('#pub-image')?.addEventListener('change', (e) => {
-    const f = e.target.files[0], im = $('#pub-apercu');
-    if (f) { im.src = URL.createObjectURL(f); im.classList.remove('cache'); } else im.classList.add('cache');
-  });
   $('#form-pub')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const texte = $('#pub-texte').value.trim(), f = $('#pub-image').files[0];
-    if (!texte && !f) return toast('Écrivez un message ou ajoutez une photo.', true);
-    const b = e.submitter; b.disabled = true;
+    const texte = $('#pub-texte').value.trim(), fichiers = photosPub.fichiers();
+    if (!texte && !fichiers.length) return toast('Écrivez un message ou ajoutez une photo.', true);
+    const b = e.submitter, libelle = b.textContent; b.disabled = true;
     try {
-      const image_path = await envoyerImage(f);
-      const { error: e2 } = await sb.from('publications').insert({ auteur_id: uid, type: 'message', texte: texte || null, image_path });
-      if (e2) throw e2;
+      const images = await envoyerImages(fichiers, b);
+      const { error: e2 } = await sb.from('publications').insert({ auteur_id: uid, type: 'message', texte: texte || null, images, image_path: images[0] || null });
+      if (e2) { if (images.length) sb.storage.from('publications').remove(images); throw e2; }
       apresEnvoi(); vueFil('actualites');
-    } catch (err) { erreur(err); b.disabled = false; }
+    } catch (err) { erreur(err); b.disabled = false; b.textContent = libelle; }
   });
   $('#btn-annoncer')?.addEventListener('click', () => { $('#form-evt').classList.toggle('cache'); });
   $('#form-evt')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const b = e.submitter; b.disabled = true;
+    const b = e.submitter, libelle = b.textContent; b.disabled = true;
     try {
       const d = new Date($('#evt-date').value);
       if (isNaN(d)) throw new Error('Choisissez la date et l\'heure.');
-      const image_path = await envoyerImage($('#evt-image').files[0]);
+      const images = await envoyerImages(photosEvt.fichiers(), b);
       const { error: e2 } = await sb.from('publications').insert({
         auteur_id: uid, type: 'evenement', evt_titre: $('#evt-titre').value.trim(), evt_date: d.toISOString(),
-        evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, image_path
+        evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, images, image_path: images[0] || null
       });
-      if (e2) throw e2;
+      if (e2) { if (images.length) sb.storage.from('publications').remove(images); throw e2; }
       apresEnvoi(); vueFil('evenements');
-    } catch (err) { erreur(err); b.disabled = false; }
+    } catch (err) { erreur(err); b.disabled = false; b.textContent = libelle; }
   });
 
   // J'aime, commentaires, suppression
@@ -1798,6 +1812,8 @@ async function vueFil(onglet = 'actualites') {
     if (!carte) return;
     const id = carte.dataset.pub;
     const p = liste.find((x) => x.id === id);
+    const ph = e.target.closest('[data-photo]');
+    if (ph) return visionneuse(photosDe(p), Number(ph.dataset.photo));
     if (e.target.closest('[data-jaime]')) {
       if (p.statut !== 'publie') return toast('Disponible après validation.');
       const b = e.target.closest('[data-jaime]'); b.disabled = true;
@@ -1820,7 +1836,7 @@ async function vueFil(onglet = 'actualites') {
       $('#ok-suppr').onclick = async () => {
         const { error: e3 } = await sb.from('publications').delete().eq('id', id);
         if (e3) return erreur(e3);
-        if (p.image_path) await sb.storage.from('publications').remove([p.image_path]);
+        if (photosDe(p).length) await sb.storage.from('publications').remove(photosDe(p));
         fermerModale(); toast('Publication supprimée.'); carte.remove();
       };
     }
@@ -1833,7 +1849,7 @@ async function chargerCommentaires(p, zone) {
     .eq('publication_id', p.id).order('cree_le', { ascending: true }).limit(200);
   if (error) return erreur(error);
   const uid = etat.session.user.id;
-  const ligne = (c) => `<div class="commentaire"><span class="auteur">${esc(c.profils?.nom_complet || 'Membre')}</span><span class="date">${momentPrecis(c.cree_le)}</span>
+  const ligne = (c) => `<div class="commentaire"><a class="auteur" href="#/membre/${c.profil_id}">${esc(c.profils?.nom_complet || 'Membre')}</a><span class="date">${momentPrecis(c.cree_le)}</span>
     ${c.profil_id === uid || estAdmin() ? `<button class="lien-bouton petit" style="float:right;color:var(--doux)" data-suppr-com="${c.id}">Supprimer</button>` : ''}<p>${texteRiche(c.contenu)}</p></div>`;
   zone.innerHTML = `${(data || []).map(ligne).join('')}
     <form class="form-commentaire"><input maxlength="1000" placeholder="Écrire un commentaire…" required><button class="btn petit" type="submit">Envoyer</button></form>`;
@@ -1861,7 +1877,7 @@ async function chargerCommentaires(p, zone) {
 function enteteAuteur(p) {
   return `<div class="pub-entete">
     <div class="avatar petit-avatar">${esc((p.profils?.nom_complet || '?').charAt(0).toUpperCase())}</div>
-    <div style="flex:1;min-width:0"><b>${esc(p.profils?.nom_complet || 'Membre')}</b><div class="doux petit">${momentPrecis(p.publie_le || p.cree_le)}</div></div>
+    <div style="flex:1;min-width:0"><a class="nom-auteur" href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'Membre')}</a><div class="doux petit">${momentPrecis(p.publie_le || p.cree_le)}</div></div>
     ${boutonSupprPub(p)}
   </div>
   ${badgeStatutPub(p)}`;
@@ -1883,15 +1899,15 @@ function cartePublication(p, aimes) {
   return `<article class="carte pub" data-pub="${p.id}">
     ${enteteAuteur(p)}
     ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
-    ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="" loading="lazy">` : ''}
+    ${galerie(p)}
     ${piedReactions(p, aimes)}
   </article>`;
 }
 function carteEvenement(p, aimes, passe = false) {
   const d = new Date(p.evt_date);
   return `<article class="carte pub evenement ${passe ? 'passe' : ''}" data-pub="${p.id}">
-    ${p.image_path ? `<img class="pub-image" src="${esc(urlImagePub(p.image_path))}" alt="" loading="lazy">` : ''}
-    <div style="display:flex;gap:14px;align-items:flex-start;margin-top:${p.image_path ? '12px' : '0'}">
+    ${galerie(p)}
+    <div style="display:flex;gap:14px;align-items:flex-start;margin-top:${photosDe(p).length ? '12px' : '0'}">
       <div class="date-evt"><b>${d.getDate()}</b><span>${d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}</span></div>
       <div style="flex:1;min-width:0">
         <h3 style="margin:0">${esc(p.evt_titre)}</h3>
@@ -1899,10 +1915,261 @@ function carteEvenement(p, aimes, passe = false) {
       </div>
     </div>
     ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
-    <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">Annoncé par ${esc(p.profils?.nom_complet || 'un membre')}${boutonSupprPub(p)}</div>
+    <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><span>Annoncé par <a href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'un membre')}</a></span>${boutonSupprPub(p)}</div>
     ${badgeStatutPub(p)}
     ${piedReactions(p, aimes)}
   </article>`;
+}
+
+// =========================================================
+// APPARENCE : MODE NUIT (par défaut) / MODE JOUR
+// =========================================================
+function themeActuel() { return document.documentElement.dataset.theme === 'jour' ? 'jour' : 'nuit'; }
+function appliquerTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('mw-theme', t); } catch (_) {}
+  $('meta[name=theme-color]')?.setAttribute('content', t === 'jour' ? '#f6f2ea' : '#141022');
+  const b = $('#btn-theme');
+  if (b) { b.textContent = t === 'jour' ? '☾' : '☀'; b.title = t === 'jour' ? 'Passer en mode nuit' : 'Passer en mode jour'; }
+}
+function basculerTheme() { appliquerTheme(themeActuel() === 'jour' ? 'nuit' : 'jour'); }
+appliquerTheme(themeActuel());
+$('#btn-theme')?.addEventListener('click', basculerTheme);
+
+// =========================================================
+// PHOTOS MULTIPLES DES PUBLICATIONS
+// =========================================================
+const MAX_PHOTOS = 10;
+const photosDe = (p) => (p?.images?.length ? p.images : p?.image_path ? [p.image_path] : []);
+
+// Réduit une photo (1600 px max., JPEG) pour un envoi rapide ; garde l'original en cas d'échec
+async function reduireImage(f) {
+  try {
+    if (!/^image\/(jpeg|png|webp|heic|heif)/.test(f.type) && !/\.(jpe?g|png|webp|heic)$/i.test(f.name)) return f;
+    const bmp = await createImageBitmap(f);
+    const max = 1600, r = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    if (r === 1 && f.size < 1.5 * 1024 * 1024 && f.type !== 'image/heic') { bmp.close?.(); return f; }
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * r); c.height = Math.round(bmp.height * r);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close?.();
+    const blob = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.85));
+    return blob && blob.size < f.size ? new File([blob], 'photo.jpg', { type: 'image/jpeg' }) : f;
+  } catch (_) { return f; }
+}
+
+// Sélecteur : on peut choisir plusieurs photos, en ajouter encore, et en retirer une
+function selecteurPhotos(input, zone) {
+  let liste = [];
+  if (!input || !zone) return { fichiers: () => [] };
+  const dessiner = () => {
+    zone.innerHTML = liste.map((x, i) => `<div class="vignette"><img src="${x.url}" alt=""><button type="button" data-retirer="${i}" title="Retirer">×</button></div>`).join('')
+      + (liste.length ? `<div class="doux petit nb-photos">${liste.length}/${MAX_PHOTOS} photo${liste.length > 1 ? 's' : ''}</div>` : '');
+  };
+  input.addEventListener('change', () => {
+    const nouveaux = [...input.files].filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
+    const place = MAX_PHOTOS - liste.length;
+    if (nouveaux.length > place) toast(`${MAX_PHOTOS} photos maximum par publication.`, true);
+    liste.push(...nouveaux.slice(0, Math.max(0, place)).map((f) => ({ f, url: URL.createObjectURL(f) })));
+    input.value = '';
+    dessiner();
+  });
+  zone.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retirer]');
+    if (!b) return;
+    URL.revokeObjectURL(liste[+b.dataset.retirer].url);
+    liste.splice(+b.dataset.retirer, 1);
+    dessiner();
+  });
+  return { fichiers: () => liste.map((x) => x.f) };
+}
+
+// Affichage en mosaïque (1, 2, 3, 4 et plus)
+function galerie(p) {
+  const ph = photosDe(p);
+  if (!ph.length) return '';
+  const vis = ph.slice(0, 4), reste = ph.length - vis.length;
+  if (ph.length === 1) return `<img class="pub-image" data-photo="0" src="${esc(urlImagePub(ph[0]))}" alt="" loading="lazy">`;
+  return `<div class="galerie g${vis.length}">${vis.map((x, i) => `<div class="g-case" data-photo="${i}"><img src="${esc(urlImagePub(x))}" alt="" loading="lazy">${i === 3 && reste > 0 ? `<span class="g-plus">+${reste}</span>` : ''}</div>`).join('')}</div>`;
+}
+
+// Visionneuse plein écran : précédente / suivante, glisser du doigt
+function visionneuse(photos, i = 0) {
+  if (!photos.length) return;
+  const fond = document.createElement('div');
+  fond.className = 'visionneuse';
+  document.body.appendChild(fond);
+  const montrer = () => {
+    fond.innerHTML = `<img src="${esc(urlImagePub(photos[i]))}" alt="">
+      <button class="v-fermer" title="Fermer">×</button>
+      ${photos.length > 1 ? `<button class="v-prec" title="Précédente">‹</button><button class="v-suiv" title="Suivante">›</button><div class="v-compte">${i + 1} / ${photos.length}</div>` : ''}`;
+  };
+  const aller = (d) => { i = (i + d + photos.length) % photos.length; montrer(); };
+  const fermer = () => { fond.remove(); document.removeEventListener('keydown', clavier); };
+  const clavier = (e) => { if (e.key === 'Escape') fermer(); if (e.key === 'ArrowLeft') aller(-1); if (e.key === 'ArrowRight') aller(1); };
+  document.addEventListener('keydown', clavier);
+  fond.addEventListener('click', (e) => {
+    if (e.target.closest('.v-prec')) return aller(-1);
+    if (e.target.closest('.v-suiv')) return aller(1);
+    if (e.target.closest('.v-fermer') || e.target === fond) fermer();
+  });
+  let x0 = null;
+  fond.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  fond.addEventListener('touchend', (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; if (Math.abs(dx) > 50 && photos.length > 1) aller(dx < 0 ? 1 : -1); x0 = null; });
+  montrer();
+}
+
+// =========================================================
+// MESSAGES PRIVÉS
+// =========================================================
+let minuterieConversation = null;
+async function majBadgeMessages() {
+  const pastille = $('#badge-msg');
+  if (!pastille) return;
+  if (!etat.session) { pastille.classList.add('cache'); return; }
+  const { data } = await sb.rpc('nb_messages_non_lus');
+  const n = Number(data || 0);
+  pastille.textContent = n > 99 ? '99+' : String(n);
+  pastille.classList.toggle('cache', !n);
+}
+setInterval(() => { if (document.visibilityState === 'visible') majBadgeMessages(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majBadgeMessages(); });
+
+function momentMessage(d) {
+  const j = new Date(d), maintenant = new Date();
+  if (j.toDateString() === maintenant.toDateString()) return j.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+async function vueMessages(autre) {
+  if (autre) return vueConversation(autre);
+  chargement();
+  const { data: convs, error } = await sb.rpc('mes_conversations');
+  if (error) throw error;
+  vue.innerHTML = `
+    <h1>Messages</h1>
+    <div class="recherche"><input id="cherche-dest" type="search" placeholder="Écrire à… (rechercher un membre par son nom)"></div>
+    <div id="resultats-dest" class="liste cache" style="margin-bottom:14px"></div>
+    <div id="liste-convs" class="liste liste-simple">${(convs || []).map((c) => `
+      <a class="ligne-titre conv ${c.non_lus ? 'non-lu' : ''}" href="#/messages/${c.autre_id}">
+        <div class="avatar petit-avatar">${esc((c.nom_complet || '?').charAt(0).toUpperCase())}</div>
+        <div class="lt-infos">
+          <div class="lt-titre">${esc(c.nom_complet || 'Membre')}</div>
+          <div class="lt-artiste">${c.dernier_de_moi ? 'Vous : ' : ''}${esc(c.dernier_contenu)}</div>
+        </div>
+        <div class="conv-droite"><span class="doux petit">${momentMessage(c.dernier_le)}</span>${c.non_lus ? `<span class="pastille">${c.non_lus}</span>` : ''}</div>
+      </a>`).join('') || '<div class="vide"><span class="grand">✉</span>Aucun message pour le moment.<br>Recherchez un membre ci-dessus, ou touchez le nom d\'une personne dans le Fil pour lui écrire.</div>'}</div>`;
+
+  let t = null;
+  $('#cherche-dest').oninput = (e) => {
+    clearTimeout(t);
+    const q = e.target.value.trim(), zone = $('#resultats-dest');
+    if (q.length < 2) { zone.classList.add('cache'); return; }
+    t = setTimeout(async () => {
+      const { data, error: e2 } = await sb.from('profils').select('id, nom_complet').ilike('nom_complet', `%${q.replace(/[%_,()]/g, ' ')}%`)
+        .neq('id', etat.session.user.id).order('nom_complet').limit(20);
+      if (e2) return erreur(e2);
+      zone.classList.remove('cache');
+      zone.innerHTML = (data || []).map((m) => `
+        <a class="ligne-titre" href="#/messages/${m.id}"><div class="avatar petit-avatar">${esc((m.nom_complet || '?').charAt(0).toUpperCase())}</div>
+        <div class="lt-infos"><div class="lt-titre">${esc(m.nom_complet || 'Membre')}</div></div><span class="btn petit">✉ Écrire</span></a>`).join('')
+        || '<div class="vide" style="padding:14px">Aucun membre trouvé.</div>';
+    }, 300);
+  };
+}
+
+async function vueConversation(autre) {
+  const uid = etat.session.user.id;
+  if (autre === uid) { location.hash = '#/messages'; return; }
+  chargement();
+  const { data: p, error } = await sb.from('profils').select('id, nom_complet').eq('id', autre).maybeSingle();
+  if (error) throw error;
+  if (!p) { vue.innerHTML = '<div class="vide">Membre introuvable.</div>'; return; }
+  vue.innerHTML = `
+    <div class="conv-entete">
+      <a href="#/messages" class="lien-bouton" style="font-size:22px" title="Retour">‹</a>
+      <a href="#/membre/${p.id}" class="conv-qui"><div class="avatar petit-avatar">${esc((p.nom_complet || '?').charAt(0).toUpperCase())}</div><b>${esc(p.nom_complet || 'Membre')}</b></a>
+    </div>
+    <div id="fil-messages" class="fil-messages"><div class="doux petit" style="text-align:center">Chargement…</div></div>
+    <form id="form-msg" class="form-msg">
+      <textarea id="msg-texte" maxlength="2000" rows="1" placeholder="Écrire un message…" required></textarea>
+      <button class="btn" type="submit" title="Envoyer">➤</button>
+    </form>
+    <p class="doux petit" style="text-align:center;margin-top:6px">🔒 Conversation privée : visible seulement par vous deux.</p>`;
+
+  let messages = [];
+  const bulle = (m) => `<div class="bulle ${m.expediteur_id === uid ? 'moi' : 'lui'}" data-msg="${m.id}">
+      <div class="bulle-texte">${texteRiche(m.contenu)}</div>
+      <div class="bulle-heure">${momentPrecis(m.cree_le)}${m.expediteur_id === uid ? (m.lu_le ? ' · Lu' : ' · Envoyé') : ''}</div>
+    </div>`;
+  const charger = async (defiler) => {
+    const { data, error: e2 } = await sb.from('messages').select('*')
+      .or(`and(expediteur_id.eq.${uid},destinataire_id.eq.${autre}),and(expediteur_id.eq.${autre},destinataire_id.eq.${uid})`)
+      .order('cree_le', { ascending: false }).limit(200);
+    if (e2) return erreur(e2);
+    const nouveaux = (data || []).reverse();
+    const change = nouveaux.length !== messages.length || nouveaux.some((m, i) => m.id !== messages[i]?.id || m.lu_le !== messages[i]?.lu_le);
+    messages = nouveaux;
+    const zone = $('#fil-messages');
+    if (!zone) return;
+    if (change || defiler) {
+      const enBas = zone.scrollHeight - zone.scrollTop - zone.clientHeight < 80;
+      zone.innerHTML = messages.map(bulle).join('') || `<div class="vide" style="padding:20px"><span class="grand">✉</span>Écrivez le premier message à ${esc(p.nom_complet || 'ce membre')}.</div>`;
+      if (defiler || enBas) zone.scrollTop = zone.scrollHeight;
+    }
+    if (messages.some((m) => m.destinataire_id === uid && !m.lu_le)) { await sb.rpc('marquer_messages_lus', { autre }); majBadgeMessages(); }
+  };
+  await charger(true);
+  clearInterval(minuterieConversation);
+  minuterieConversation = setInterval(() => { if (document.visibilityState === 'visible' && $('#fil-messages')) charger(false); }, 8000);
+
+  const ta = $('#msg-texte');
+  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'; });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width: 900px)').matches) { e.preventDefault(); $('#form-msg').requestSubmit(); } });
+  $('#form-msg').onsubmit = async (e) => {
+    e.preventDefault();
+    const contenu = ta.value.trim();
+    if (!contenu) return;
+    const b = e.submitter || $('#form-msg button'); b.disabled = true;
+    const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu });
+    b.disabled = false;
+    if (e2) return erreur(e2);
+    ta.value = ''; ta.style.height = 'auto'; ta.focus();
+    await charger(true);
+  };
+  $('#fil-messages').onclick = (e) => {
+    const bl = e.target.closest('.bulle.moi');
+    if (!bl) return;
+    ouvrirModale(`<h2 style="margin-top:0">Supprimer ce message ?</h2><p class="doux">Il disparaîtra aussi chez ${esc(p.nom_complet || 'le destinataire')}.</p>
+      <button class="btn danger plein" id="ok-suppr-msg">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+    $('#ok-suppr-msg').onclick = async () => {
+      const { error: e3 } = await sb.from('messages').delete().eq('id', bl.dataset.msg);
+      if (e3) return erreur(e3);
+      fermerModale(); charger(true);
+    };
+  };
+}
+
+// Page d'un membre : son nom, sa page artiste éventuelle, et le bouton « Envoyer un message »
+async function vueMembre(id) {
+  if (id === etat.session.user.id) { location.hash = '#/profil'; return; }
+  chargement();
+  const [{ data: p, error }, { data: art }] = await Promise.all([
+    sb.from('profils').select('id, nom_complet, role, cree_le').eq('id', id).maybeSingle(),
+    sb.from('artistes').select('id, nom_scene').eq('profil_id', id).eq('statut', 'valide').maybeSingle()
+  ]);
+  if (error) throw error;
+  if (!p) { vue.innerHTML = '<div class="vide">Membre introuvable.</div>'; return; }
+  vue.innerHTML = `
+    <div class="profil-tete">
+      <div class="avatar">${esc((p.nom_complet || '?').charAt(0).toUpperCase())}</div>
+      <div><h1 style="margin:0">${esc(p.nom_complet || 'Membre')}</h1>
+        <div class="doux">${p.role === 'admin' ? 'Administrateur' : art ? 'Artiste' : 'Croyant'} · membre depuis ${dateCourte(p.cree_le)}</div></div>
+    </div>
+    <div class="actions" style="justify-content:flex-start">
+      <a class="btn" href="#/messages/${p.id}">✉ Envoyer un message</a>
+      ${art ? `<a class="btn secondaire" href="#/a/${art.id}">♪ Voir sa page artiste</a>` : ''}
+    </div>`;
 }
 
 // =========================================================
