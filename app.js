@@ -1766,11 +1766,23 @@ async function vueFil(onglet = 'actualites') {
     const chemins = [];
     for (let i = 0; i < fichiers.length; i++) {
       if (fichiers.length > 1) bouton.textContent = `Envoi des photos ${i + 1}/${fichiers.length}…`;
-      const f = await reduireImage(fichiers[i]);
+      const f = fichiers[i];
       if (f.size > 5 * 1024 * 1024) throw new Error('Une photo est trop lourde (5 Mo max.).');
       const chemin = `${uid}/${Date.now()}-${i}.${f.type === 'image/png' ? 'png' : f.type === 'image/webp' ? 'webp' : 'jpg'}`;
-      const { error: e } = await sb.storage.from('publications').upload(chemin, f, { contentType: f.type || 'image/jpeg', upsert: true });
-      if (e) { if (chemins.length) sb.storage.from('publications').remove(chemins); throw e; }
+      let e;
+      try {
+        ({ error: e } = await Promise.race([
+          sb.storage.from('publications').upload(chemin, f, { contentType: f.type || 'image/jpeg', upsert: true }),
+          new Promise((_, ko) => setTimeout(() => ko(new Error('délai dépassé')), 120000))
+        ]));
+      } catch (x) { e = x; }
+      if (e) {
+        if (chemins.length) sb.storage.from('publications').remove(chemins);
+        const m = e.message || String(e);
+        throw new Error(/fetch|délai|network/i.test(m)
+          ? `La photo ${i + 1} n'a pas pu être envoyée (connexion trop faible ou coupée). Réessayez.`
+          : `Envoi de la photo ${i + 1} impossible : ${m}`);
+      }
       chemins.push(chemin);
     }
     return chemins;
@@ -1958,6 +1970,25 @@ async function reduireImage(f) {
   } catch (_) { return f; }
 }
 
+// Prépare une photo dès qu'elle est choisie : copie en mémoire, réduite et convertie en JPEG
+async function preparerPhoto(f) {
+  const brut = new Blob([await f.arrayBuffer()], { type: f.type || 'image/jpeg' }); // lecture immédiate (sinon erreur)
+  let img;
+  try { img = await createImageBitmap(brut); } catch (_) {
+    img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Format de photo non pris en charge')); i.src = URL.createObjectURL(brut); });
+  }
+  const l = img.width || img.naturalWidth, h = img.height || img.naturalHeight;
+  const r = Math.min(1, 1600 / Math.max(l, h));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(l * r)); c.height = Math.max(1, Math.round(h * r));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  img.close?.();
+  const jpeg = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.85));
+  if (jpeg && jpeg.size > 0) return new File([jpeg], 'photo.jpg', { type: 'image/jpeg' });
+  if (/^image\/(jpeg|png|webp)$/.test(brut.type)) return new File([brut], 'photo', { type: brut.type });
+  throw new Error('Photo illisible');
+}
+
 // Sélecteur : on peut choisir plusieurs photos, en ajouter encore, et en retirer une
 function selecteurPhotos(input, zone) {
   let liste = [];
@@ -1966,13 +1997,22 @@ function selecteurPhotos(input, zone) {
     zone.innerHTML = liste.map((x, i) => `<div class="vignette"><img src="${x.url}" alt=""><button type="button" data-retirer="${i}" title="Retirer">×</button></div>`).join('')
       + (liste.length ? `<div class="doux petit nb-photos">${liste.length}/${MAX_PHOTOS} photo${liste.length > 1 ? 's' : ''}</div>` : '');
   };
-  input.addEventListener('change', () => {
-    const nouveaux = [...input.files].filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
+  input.addEventListener('change', async () => {
+    // On lit les photos TOUT DE SUITE : sur certains Android, le fichier choisi n'est plus lisible au moment de l'envoi
+    const choisis = [...input.files].filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name) || !f.type);
     const place = MAX_PHOTOS - liste.length;
-    if (nouveaux.length > place) toast(`${MAX_PHOTOS} photos maximum par publication.`, true);
-    liste.push(...nouveaux.slice(0, Math.max(0, place)).map((f) => ({ f, url: URL.createObjectURL(f) })));
+    if (choisis.length > place) toast(`${MAX_PHOTOS} photos maximum par publication.`, true);
+    const aLire = choisis.slice(0, Math.max(0, place));
+    if (!aLire.length) { input.value = ''; return; }
+    zone.insertAdjacentHTML('beforeend', '<div class="doux petit nb-photos" data-lecture>Préparation des photos…</div>');
+    let illisibles = 0;
+    for (const f of aLire) {
+      try { const pret = await preparerPhoto(f); liste.push({ f: pret, url: URL.createObjectURL(pret) }); }
+      catch (e) { console.error(e); illisibles++; }
+    }
     input.value = '';
     dessiner();
+    if (illisibles) toast(illisibles > 1 ? `${illisibles} photos n'ont pas pu être lues. Choisissez-les depuis « Fichiers » ou « Galerie ».` : 'Cette photo n\'a pas pu être lue. Choisissez-la depuis « Fichiers » ou « Galerie ».', true);
   });
   zone.addEventListener('click', (e) => {
     const b = e.target.closest('[data-retirer]');
