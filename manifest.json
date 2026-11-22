@@ -1,6 +1,6 @@
 {
-  "name": "Mongongo Way",
-  "short_name": "Mongongo",
+  "name": "MongongoWay",
+  "short_name": "MongongoWay",
   "description": "La voix des musiciens de Theway RDC",
   "start_url": "./#/accueil",
   "scope": "./",

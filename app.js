@@ -389,8 +389,8 @@ async function jouer(t, depuisHistorique = false) {
       const pochette = urlPochette(t.pochette_path);
       navigator.mediaSession.metadata = new MediaMetadata({
         title: t.titre,
-        artist: t.artistes?.nom_scene || 'Mongongo Way',
-        album: 'Mongongo Way',
+        artist: t.artistes?.nom_scene || 'MongongoWay',
+        album: 'MongongoWay',
         artwork: pochette ? [{ src: pochette, sizes: '512x512' }] : [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }]
       });
       navigator.mediaSession.setActionHandler('nexttrack', () => suivant(1));
@@ -437,8 +437,8 @@ function rafraichirLignes() {
 }
 $('#lecteur-bouton').onclick = basculerLecture;
 $('#lecteur-titre').onclick = () => etat.enCours && (location.hash = `#/titre/${etat.enCours.id}`);
-audio.addEventListener('play', () => { $('#lecteur-bouton').textContent = '❚❚'; rafraichirLignes(); });
-audio.addEventListener('pause', () => { $('#lecteur-bouton').textContent = '▶'; rafraichirLignes(); });
+audio.addEventListener('play', () => { $('#lecteur-bouton').textContent = '❚❚'; rafraichirLignes(); document.body.classList.add('en-lecture'); });
+audio.addEventListener('pause', () => { $('#lecteur-bouton').textContent = '▶'; rafraichirLignes(); document.body.classList.remove('en-lecture'); });
 audio.addEventListener('ended', () => suivant(1));
 audio.addEventListener('timeupdate', () => {
   if (audio.duration) $('#lecteur-barre').value = (audio.currentTime / audio.duration) * 100;
@@ -1241,7 +1241,7 @@ async function vueProfil() {
     </div>
     <div class="apropos">
       <img src="icon-192.png" width="40" height="40" alt="" style="border-radius:10px"><br>
-      <b style="color:var(--texte)">Mongongo Way</b> · version 1.0<br>
+      <b style="color:var(--texte)">MongongoWay</b> · version 1.0<br>
       La plateforme musicale des musiciens de Theway RDC<br>
       Conçue et développée par <b style="color:var(--texte)">Ingénieur Van MUFWAR</b>
     </div>`;
@@ -1678,7 +1678,7 @@ async function vueAbonnement() {
   ];
   vue.innerHTML = `
     <div class="banniere">
-      <h1>Abonnement Mongongo Way</h1>
+      <h1>Abonnement MongongoWay</h1>
       <p>${abo ? `Votre abonnement est actif jusqu'au <b>${dateCourte(etat.finAbo)}</b>.` : 'Sans abonnement : écoute gratuite en lecture aléatoire, téléchargements payants.'}</p>
     </div>
     <div class="carte">
@@ -2397,7 +2397,7 @@ function modaleSoutien(a) {
     const pa = Math.round(valeur * part) / 100;
     $('#partage').innerHTML = `
       <div style="display:flex;justify-content:space-between"><span>${esc(a.nom_scene)} reçoit (${part} %)</span><b style="color:var(--or)">${montant(pa)}</b></div>
-      <div style="display:flex;justify-content:space-between" class="doux petit"><span>Administration Mongongo Way (${100 - part} %)</span><span>${montant(valeur - pa)}</span></div>`;
+      <div style="display:flex;justify-content:space-between" class="doux petit"><span>Administration MongongoWay (${100 - part} %)</span><span>${montant(valeur - pa)}</span></div>`;
     $('#envoyer-don').textContent = `Envoyer ${montant(valeur)}`;
   };
   $$('input[name=mt]').forEach((r) => r.onchange = () => { $('#mt-libre').value = ''; maj(); });
@@ -2472,3 +2472,27 @@ sb.auth.onAuthStateChange((evenement, session) => {
     }, 0);
   }
 });
+
+// =========================================================
+// OUVERTURE ANIMÉE : le logo s'efface dès que l'app est prête
+// =========================================================
+(() => {
+  const ouv = document.getElementById('ouverture');
+  if (!ouv) return;
+  const debut = performance.now();
+  const dejaVu = ouv.classList.contains('deja');
+  const duree = dejaVu ? 0 : matchMedia('(prefers-reduced-motion: reduce)').matches ? 700 : 2300;
+  let fini = false;
+  const fermer = () => {
+    if (fini) return; fini = true;
+    try { sessionStorage.setItem('mw-ouvert', '1'); } catch (_) {}
+    ouv.classList.add('sortie');
+    setTimeout(() => ouv.remove(), 600);
+  };
+  const quandPret = () => setTimeout(fermer, Math.max(0, duree - (performance.now() - debut)));
+  // Prête = la première page affichée (ou au plus tard 6 secondes, même sans réseau)
+  const obs = new MutationObserver(() => { if (vue.children.length && !vue.querySelector('.chargement')) { obs.disconnect(); quandPret(); } });
+  obs.observe(vue, { childList: true, subtree: true });
+  setTimeout(fermer, 6000);
+  ouv.addEventListener('click', () => { if (performance.now() - debut > 900) fermer(); });
+})();
