@@ -1277,7 +1277,7 @@ async function vueAdmin(onglet = 'artistes') {
     sb.from('tarifs').select('*').order('cle'),
     sb.from('profils').select('*', { count: 'exact', head: true }),
     sb.from('titres').select('*', { count: 'exact', head: true }).eq('statut', 'publie'),
-    sb.from('publications').select('*, profils(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le')
+    sb.from('publications').select('*, profils!auteur_id(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le')
   ]);
 
   vue.innerHTML = `
@@ -1693,7 +1693,7 @@ async function vueFil(onglet = 'actualites') {
   const uid = etat.session.user.id;
   const type = onglet === 'evenements' ? 'evenement' : 'message';
   const [{ data: pubs, error }, { data: mesJaimes }] = await Promise.all([
-    sb.from('publications').select('*, profils(nom_complet)').eq('type', type)
+    sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type)
       .or(`statut.eq.publie,auteur_id.eq.${uid}`)
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
     sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid)
