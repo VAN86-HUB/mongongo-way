@@ -1,5 +1,5 @@
 // Service worker Mongongo Way : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v22';
+const VERSION = 'mongongo-v23';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './fond.jpg'
@@ -36,4 +36,24 @@ self.addEventListener('fetch', (e) => {
       })
       .catch(() => caches.match(e.request).then((r) => r || caches.match('./index.html')))
   );
+});
+
+// Notifications de l'administrateur (nouvelles demandes à valider)
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { corps: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(d.titre || 'Mongongo Way', {
+    body: d.corps || 'Une demande attend votre validation.',
+    icon: 'icon-192.png', badge: 'icon-192.png', tag: 'demandes-admin', renotify: true,
+    vibrate: [200, 100, 200], requireInteraction: true, data: { lien: d.lien || '#/admin' }
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const cible = new URL('./' + (e.notification.data && e.notification.data.lien || '#/admin'), self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((fen) => {
+    const f = fen.find((c) => c.url.startsWith(self.registration.scope));
+    if (f) return f.focus().then(() => f.navigate ? f.navigate(cible) : null).catch(() => self.clients.openWindow(cible));
+    return self.clients.openWindow(cible);
+  }));
 });

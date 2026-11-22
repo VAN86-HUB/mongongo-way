@@ -413,3 +413,14 @@ html[data-theme=jour] .lt-play { background: rgba(201,138,28,.12); }
 html[data-theme=jour] .date-evt span { color: var(--texte); }
 html[data-theme=jour] .pub-image, html[data-theme=jour] .g-case { background: rgba(0,0,0,.06); }
 @media (min-width: 900px) { html[data-theme=jour] .nav { background: rgba(255, 252, 246, .97); } }
+
+/* Alertes de l'administrateur */
+.nav a .ico { position: relative; }
+.pastille-nav { position: absolute; top: -6px; right: -12px; min-width: 18px; height: 18px; font-size: 10px; border: 2px solid var(--fond); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+.menu .pastille { margin-left: 6px; vertical-align: 1px; }
+.alerte-admin { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 14px; border-radius: var(--rayon); background: rgba(226,100,100,.14); border: 1px solid var(--rouge); color: var(--texte); font-size: 22px; animation: lueur 2s ease-in-out infinite; }
+.alerte-admin > span:first-of-type { flex: 1; font-size: 15px; }
+@keyframes lueur { 0%, 100% { box-shadow: 0 0 0 0 rgba(226,100,100,.0); } 50% { box-shadow: 0 0 0 6px rgba(226,100,100,.18); } }
+.carte-notif.ok { border-color: var(--vert); }
+@media (min-width: 900px) { .alerte-admin, #zone-notif-accueil .carte { max-width: 680px; } .pastille-nav { right: -10px; } }

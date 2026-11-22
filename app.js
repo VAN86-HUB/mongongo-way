@@ -185,6 +185,7 @@ async function router() {
   $('#btn-messages')?.classList.toggle('actif', nom === 'messages');
   clearInterval(minuterieConversation);
   majBadgeMessages();
+  majAlertesAdmin();
   window.scrollTo(0, 0);
   try {
     await (routes[nom] || vueAccueil)(param);
@@ -270,12 +271,17 @@ async function vueAccueil() {
       <h1>${prenom ? `Mbote ${esc(prenom)} !` : 'Mbote !'}</h1>
       <p>${estAbonne() ? 'Vous êtes abonné : écoute dans l\'ordre, clips à la suite et téléchargements gratuits.' : 'Écoute gratuite en lecture aléatoire. <a href="#/abonnement" style="color:#fff;text-decoration:underline">Abonnez-vous</a> pour écouter dans l\'ordre et télécharger gratuitement.'}</p>
     </div>
+    ${estAdmin() ? '<div id="alerte-admin"></div><div id="zone-notif-accueil"></div>' : ''}
     <div class="recherche"><input id="cherche" type="search" placeholder="Rechercher un titre, un artiste, un genre…"></div>
     <div class="onglets" style="margin:6px 0 14px">
       <button data-tri="nouveautes" class="${(vueAccueil.tri || 'nouveautes') === 'nouveautes' ? 'actif' : ''}">Nouveautés</button>
       <button data-tri="ecoutes" class="${vueAccueil.tri === 'ecoutes' ? 'actif' : ''}">Les plus écoutés</button>
     </div>
     <div id="liste" class="liste"></div>`;
+  if (estAdmin()) {
+    majAlertesAdmin();
+    if (notifPossibles() && Notification.permission === 'default') carteNotifications($('#zone-notif-accueil'));
+  }
 
   const parAuditeurs = (a, b) => (b.nb_auditeurs || 0) - (a.nb_auditeurs || 0) || (b.nb_ecoutes || 0) - (a.nb_ecoutes || 0);
   const dessinerListe = (liste0) => {
@@ -1227,7 +1233,7 @@ async function vueProfil() {
       <a href="#/messages">Mes messages</a>
       <a href="#/achats">Mes téléchargements</a>
       <a href="#/artiste">${etat.artiste ? 'Mon espace artiste' : 'Devenir artiste'}</a>
-      ${estAdmin() ? '<a href="#/admin">Administration</a>' : ''}
+      ${estAdmin() ? '<a href="#/admin"><span>Administration <span class="pastille cache" data-nb-admin></span></span></a>' : ''}
       <button id="modif-nom">Modifier mon nom</button>
       <button id="choix-theme">Apparence <span class="doux" id="theme-actuel">${themeActuel() === 'jour' ? '☀ Jour' : '☾ Nuit'}</span></button>
       <button id="installer" class="cache">Installer l'application sur ce téléphone</button>
@@ -1240,6 +1246,7 @@ async function vueProfil() {
       Conçue et développée par <b style="color:var(--texte)">Ingénieur Van MUFWAR</b>
     </div>`;
 
+  majAlertesAdmin();
   $('#choix-theme').onclick = () => { basculerTheme(); $('#theme-actuel').textContent = themeActuel() === 'jour' ? '☀ Jour' : '☾ Nuit'; };
   $('#deconnexion').onclick = async () => { audio.pause(); await sb.auth.signOut(); };
   $('#modif-nom').onclick = () => {
@@ -1291,6 +1298,7 @@ async function vueAdmin(onglet = 'artistes') {
 
   vue.innerHTML = `
     <h1>Administration</h1>
+    <div id="zone-notif"></div>
     <div class="chiffres">
       <div class="chiffre"><b>${nbMembres ?? 0}</b><span>membres</span></div>
       <div class="chiffre"><b>${nbPublies ?? 0}</b><span>titres publiés</span></div>
@@ -1307,6 +1315,8 @@ async function vueAdmin(onglet = 'artistes') {
     </div>
     <div id="admin-contenu" style="margin-top:14px"></div>`;
   $$('.onglets button').forEach((b) => b.onclick = () => vueAdmin(b.dataset.o));
+  carteNotifications($('#zone-notif'));
+  majAlertesAdmin();
   const zone = $('#admin-contenu');
 
   if (onglet === 'artistes') {
@@ -2210,6 +2220,93 @@ async function vueMembre(id) {
       <a class="btn" href="#/messages/${p.id}">✉ Envoyer un message</a>
       ${art ? `<a class="btn secondaire" href="#/a/${art.id}">♪ Voir sa page artiste</a>` : ''}
     </div>`;
+}
+
+// =========================================================
+// ALERTES DE L'ADMINISTRATEUR : demandes en attente de validation
+// =========================================================
+const VAPID_PUBLIQUE = 'BBlaKgmfda6ZrCyB1ipFmeAdU8sGnBvJE4xAGsaUHZmtb_yio7pC4Clc5_OCekb4vWcBUvFFmPAF4ZX-6hGyDIQ';
+let nbDemandesPrec = null;
+
+async function majAlertesAdmin() {
+  const pastille = $('#pastille-admin');
+  if (!etat.session || !estAdmin()) { pastille?.classList.add('cache'); return; }
+  const { data, error } = await sb.rpc('nb_demandes_en_attente');
+  if (error) return;
+  const n = Number(data || 0);
+  if (pastille) { pastille.textContent = n > 99 ? '99+' : String(n); pastille.classList.toggle('cache', !n); }
+  $$('[data-nb-admin]').forEach((x) => { x.textContent = n; x.classList.toggle('cache', !n); });
+  const zone = $('#alerte-admin');
+  if (zone) zone.innerHTML = n ? `<a class="alerte-admin" href="#/admin">🔔 <span><b>${n} demande${n > 1 ? 's' : ''} en attente</b> de votre validation</span><span class="btn petit">Voir</span></a>` : '';
+  // Nouvelle demande arrivée pendant que l'app est ouverte : on attire l'attention
+  if (nbDemandesPrec !== null && n > nbDemandesPrec && document.visibilityState === 'visible') {
+    toast(`🔔 Nouvelle demande à valider (${n} en attente)`);
+    navigator.vibrate?.([200, 100, 200]);
+  }
+  nbDemandesPrec = n;
+}
+setInterval(() => { if (document.visibilityState === 'visible') majAlertesAdmin(); }, 45000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majAlertesAdmin(); });
+
+// ---------- Notifications sur le téléphone (même application fermée) ----------
+const notifPossibles = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function cleVapid() {
+  const b = atob(VAPID_PUBLIQUE.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - VAPID_PUBLIQUE.length % 4) % 4));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+async function abonnementActuel() {
+  if (!notifPossibles()) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function activerNotifications() {
+  if (!notifPossibles()) throw new Error('Ce navigateur ne permet pas les notifications. Sur iPhone, installez d\'abord l\'application sur l\'écran d\'accueil.');
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Notifications refusées. Autorisez-les dans les réglages du navigateur (icône 🔒 à côté de l\'adresse), puis réessayez.');
+  const reg = await navigator.serviceWorker.ready;
+  let abo = await reg.pushManager.getSubscription();
+  if (!abo) abo = await Promise.race([
+    reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: cleVapid() }),
+    new Promise((_, ko) => setTimeout(() => ko(new Error('Le service de notifications ne répond pas. Vérifiez la connexion internet et réessayez.')), 25000))
+  ]);
+  const j = abo.toJSON();
+  const appareil = /android/i.test(navigator.userAgent) ? 'Android' : /iphone|ipad/i.test(navigator.userAgent) ? 'iPhone' : /windows/i.test(navigator.userAgent) ? 'Ordinateur Windows' : 'Autre';
+  const { error } = await sb.from('push_abonnements').upsert({ endpoint: j.endpoint, profil_id: etat.session.user.id, p256dh: j.keys.p256dh, auth: j.keys.auth, appareil });
+  if (error) throw error;
+}
+async function testerNotification() {
+  const { data, error } = await sb.functions.invoke('notifier-admin', { body: { test: true } });
+  if (error) throw error;
+  if (!data?.envoye) throw new Error('Aucun appareil n\'a reçu le test. Désactivez puis réactivez les notifications.');
+}
+async function carteNotifications(zone) {
+  if (!zone) return;
+  const permis = notifPossibles() ? Notification.permission : 'impossible';
+  const abo = permis === 'granted' ? await abonnementActuel().catch(() => null) : null;
+  const actives = permis === 'granted' && !!abo;
+  zone.innerHTML = `<div class="carte carte-notif ${actives ? 'ok' : ''}">
+    <div style="display:flex;gap:12px;align-items:center">
+      <span style="font-size:26px">${actives ? '🔔' : '🔕'}</span>
+      <div style="flex:1;min-width:0"><b>Notifications sur cet appareil : ${actives ? 'activées' : 'désactivées'}</b>
+        <div class="doux petit">${actives ? 'Vous êtes prévenu dès qu\'un artiste, un titre, une publication ou un événement attend votre validation, même application fermée.'
+          : permis === 'impossible' ? 'Ce navigateur ne gère pas les notifications. Sur iPhone : installez l\'application sur l\'écran d\'accueil, puis ouvrez-la depuis l\'icône.'
+          : permis === 'denied' ? 'Les notifications sont bloquées. Autorisez-les dans les réglages du navigateur (🔒 à côté de l\'adresse).'
+          : 'Activez-les pour être prévenu de chaque nouvelle demande, même quand l\'application est fermée.'}</div></div>
+    </div>
+    <div class="boutons">${actives ? '<button class="btn secondaire petit" id="notif-test">Envoyer une notification de test</button>'
+      : permis !== 'impossible' ? '<button class="btn petit" id="notif-activer">🔔 Activer les notifications</button>' : ''}</div>
+  </div>`;
+  $('#notif-activer', zone)?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try { await activerNotifications(); toast('Notifications activées sur cet appareil.'); carteNotifications(zone); }
+    catch (err) { erreur(err); e.target.disabled = false; }
+  });
+  $('#notif-test', zone)?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try { await testerNotification(); toast('Notification de test envoyée : elle arrive dans quelques secondes.'); }
+    catch (err) { erreur(err); }
+    e.target.disabled = false;
+  });
 }
 
 // =========================================================
