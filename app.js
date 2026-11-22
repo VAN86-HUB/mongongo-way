@@ -2014,6 +2014,42 @@ function modaleSoutien(a) {
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); window.__installation = e; });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
+// ---------- Mise à jour automatique ----------
+// Version de l'app en cours (lue dans l'adresse de ce fichier : app.js?v=NN)
+const VERSION_APP = Number(new URL(import.meta.url).searchParams.get('v')) || 0;
+let majEnAttente = false;
+async function verifierMiseAJour() {
+  if (!VERSION_APP || document.visibilityState !== 'visible') return;
+  try {
+    const html = await (await fetch('index.html?verif=' + Date.now(), { cache: 'no-store' })).text();
+    const enLigne = Number((html.match(/app\.js\?v=(\d+)/) || [])[1]) || 0;
+    if (enLigne > VERSION_APP) { majEnAttente = true; appliquerMiseAJour(); }
+  } catch (_) { /* pas de connexion : on réessaiera */ }
+}
+function occupe() {
+  // On n'interrompt pas : musique ou clip en cours, formulaire en train d'être rempli, fenêtre ouverte, envoi en cours
+  const clip = $$('video').some((v) => !v.paused);
+  const saisie = $$('textarea, input:not([type=file]):not([type=search]):not([type=radio]):not([type=checkbox])').some((x) => x.value && x.offsetParent && !x.readOnly && x.id !== 'tel-paie' && x.id !== 'tel-don');
+  const envoi = $$('button[disabled]').length > 0 || !!$('.progression:not(.cache)');
+  return !audio.paused || clip || saisie || envoi || !$('#modale').classList.contains('cache');
+}
+function appliquerMiseAJour() {
+  if (!majEnAttente) return;
+  if (!occupe()) { location.reload(); return; }
+  // Occupé : on propose sans forcer
+  if (!$('#bandeau-maj')) {
+    document.body.insertAdjacentHTML('beforeend', `<div id="bandeau-maj" class="bandeau-maj">Nouvelle version disponible <button class="btn petit" id="btn-maj">Mettre à jour</button></div>`);
+    $('#btn-maj').onclick = () => location.reload();
+  }
+}
+// Vérification à chaque retour dans l'app et toutes les 10 minutes
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') verifierMiseAJour(); });
+setInterval(verifierMiseAJour, 10 * 60000);
+setTimeout(verifierMiseAJour, 15000);
+// Une mise à jour en attente s'applique dès que l'utilisateur n'est plus occupé (fin de chanson, changement de page)
+audio.addEventListener('ended', () => setTimeout(appliquerMiseAJour, 500));
+window.addEventListener('hashchange', () => setTimeout(appliquerMiseAJour, 300));
+
 let premierChargement = true;
 sb.auth.onAuthStateChange((evenement, session) => {
   const changement = !!etat.session !== !!session || etat.session?.user?.id !== session?.user?.id;
