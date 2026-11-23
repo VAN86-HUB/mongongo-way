@@ -171,6 +171,9 @@ const routes = {
   fil: vueFil,
   messages: vueMessages,
   membre: vueMembre,
+  pro: vuePro,
+  cv: vueCv,
+  recruteur: vueRecruteur,
   abonnement: vueAbonnement
 };
 
@@ -1230,9 +1233,11 @@ async function vueProfil() {
     </div>
     <div class="menu">
       <a href="#/abonnement">${estAbonne() ? `Mon abonnement · jusqu'au ${dateCourte(etat.finAbo)}` : 'S\'abonner'}</a>
+      <a href="#/pro"><span>Mon profil professionnel <span class="doux petit">· CV pour les recruteurs</span></span></a>
       <a href="#/messages">Mes messages</a>
       <a href="#/achats">Mes téléchargements</a>
       <a href="#/artiste">${etat.artiste ? 'Mon espace artiste' : 'Devenir artiste'}</a>
+      <a href="#/recruteur">Espace recruteur <span class="doux petit">· trouver des candidats</span></a>
       ${estAdmin() ? '<a href="#/admin"><span>Administration <span class="pastille cache" data-nb-admin></span></span></a>' : ''}
       <button id="modif-nom">Modifier mon nom</button>
       <button id="choix-theme">Apparence <span class="doux" id="theme-actuel">${themeActuel() === 'jour' ? '☀ Jour' : '☾ Nuit'}</span></button>
@@ -1287,14 +1292,16 @@ async function vueAchats() {
 async function vueAdmin(onglet = 'artistes') {
   if (!estAdmin()) { location.hash = '#/profil'; return; }
   chargement();
-  const [{ data: artistes }, { data: titres }, { data: tarifs }, { count: nbMembres }, { count: nbPublies }, { data: pubsAttente }] = await Promise.all([
+  const [{ data: artistes }, { data: titres }, { data: tarifs }, { count: nbMembres }, { count: nbPublies }, { data: pubsAttente }, { data: recruteursTous }] = await Promise.all([
     sb.from('artistes').select('*, profils(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le'),
     sb.from('titres').select('*, artistes(nom_scene)').in('statut', ['en_attente_paiement', 'en_validation']).order('cree_le'),
     sb.from('tarifs').select('*').order('cle'),
     sb.from('profils').select('*', { count: 'exact', head: true }),
     sb.from('titres').select('*', { count: 'exact', head: true }).eq('statut', 'publie'),
-    sb.from('publications').select('*, profils!auteur_id(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le')
+    sb.from('publications').select('*, profils!auteur_id(nom_complet, telephone)').eq('statut', 'en_attente').order('cree_le'),
+    sb.from('recruteurs').select('*, profils(nom_complet, telephone)').order('cree_le', { ascending: false })
   ]);
+  const recAttente = (recruteursTous || []).filter((r) => r.statut === 'en_attente');
 
   vue.innerHTML = `
     <h1>Administration</h1>
@@ -1302,12 +1309,13 @@ async function vueAdmin(onglet = 'artistes') {
     <div class="chiffres">
       <div class="chiffre"><b>${nbMembres ?? 0}</b><span>membres</span></div>
       <div class="chiffre"><b>${nbPublies ?? 0}</b><span>titres publiés</span></div>
-      <div class="chiffre"><b>${(artistes?.length || 0) + (titres?.length || 0) + (pubsAttente?.length || 0)}</b><span>à valider</span></div>
+      <div class="chiffre"><b>${(artistes?.length || 0) + (titres?.length || 0) + (pubsAttente?.length || 0) + recAttente.length}</b><span>à valider</span></div>
     </div>
     <div class="onglets" style="margin-top:0">
       <button data-o="artistes" class="${onglet === 'artistes' ? 'actif' : ''}">Artistes (${artistes?.length || 0})</button>
       <button data-o="titres" class="${onglet === 'titres' ? 'actif' : ''}">Titres (${titres?.length || 0})</button>
       <button data-o="publications" class="${onglet === 'publications' ? 'actif' : ''}">Publications (${pubsAttente?.length || 0})</button>
+      <button data-o="recruteurs" class="${onglet === 'recruteurs' ? 'actif' : ''}">Recruteurs (${recAttente.length})</button>
       <button data-o="membres" class="${onglet === 'membres' ? 'actif' : ''}">Membres</button>
       <button data-o="ecoutes" class="${onglet === 'ecoutes' ? 'actif' : ''}">Écoutes</button>
       <button data-o="soutiens" class="${onglet === 'soutiens' ? 'actif' : ''}">Soutiens</button>
@@ -1421,6 +1429,40 @@ async function vueAdmin(onglet = 'artistes') {
       if (error) { b.disabled = false; return erreur(error); }
       toast(v ? 'Publication validée : visible par tous.' : 'Publication refusée.');
       vueAdmin('publications');
+    };
+  }
+
+  if (onglet === 'recruteurs') {
+    const carteRec = (r) => `
+      <div class="carte">
+        <h3 style="margin:0">${esc(r.entreprise)} ${r.statut === 'valide' ? '<span class="badge" style="color:var(--vert)">Validé</span>' : r.statut === 'refuse' ? '<span class="badge" style="color:var(--rouge)">Refusé</span>' : '<span class="badge">En attente</span>'}</h3>
+        <div class="doux petit">${esc(r.profils?.nom_complet || '')} · ${esc(r.profils?.telephone || '')} · demandé le ${dateCourte(r.cree_le)}</div>
+        <div class="petit" style="margin-top:6px">${[r.secteur && 'Secteur : ' + esc(r.secteur), r.ville && 'Ville : ' + esc(r.ville), r.site_web && `Site : <a href="${esc(lienExterne(r.site_web))}" target="_blank" rel="noopener noreferrer">${esc(r.site_web)}</a>`].filter(Boolean).join(' · ')}</div>
+        ${r.motif ? `<p class="petit">${texteRiche(r.motif)}</p>` : ''}
+        <div class="boutons">
+          ${r.statut !== 'valide' ? `<button class="btn petit" data-rec="${r.profil_id}" data-statut="valide">✓ Valider</button>` : ''}
+          ${r.statut === 'en_attente' ? `<button class="btn danger petit" data-rec="${r.profil_id}" data-statut="refuse">Refuser</button>` : ''}
+          ${r.statut === 'valide' ? `<button class="btn danger petit" data-rec="${r.profil_id}" data-statut="refuse">Retirer l'accès</button>` : ''}
+          <a class="btn secondaire petit" href="#/messages/${r.profil_id}">✉ Message</a>
+        </div>
+      </div>`;
+    const autres = (recruteursTous || []).filter((r) => r.statut !== 'en_attente');
+    zone.innerHTML = (recAttente.length ? recAttente.map(carteRec).join('') : '<div class="vide">Aucune demande de recruteur en attente.</div>')
+      + (autres.length ? `<h3 style="margin-top:22px">Recruteurs déjà traités</h3>${autres.map(carteRec).join('')}` : '')
+      + '<p style="margin-top:16px"><a class="btn secondaire" href="#/recruteur">🔎 Rechercher des candidats</a></p>';
+    zone.onclick = (e) => {
+      const b = e.target.closest('[data-rec]');
+      if (!b) return;
+      const appliquer = async (motif) => {
+        const { error } = await sb.from('recruteurs').update({ statut: b.dataset.statut, motif_refus: motif || null }).eq('profil_id', b.dataset.rec);
+        if (error) return erreur(error);
+        fermerModale(); toast(b.dataset.statut === 'valide' ? 'Recruteur validé.' : 'Accès refusé.'); vueAdmin('recruteurs');
+      };
+      if (b.dataset.statut === 'valide') return appliquer();
+      ouvrirModale(`<h2 style="margin-top:0">Refuser ce recruteur</h2><label for="motif-rec">Motif (visible par la personne)</label>
+        <textarea id="motif-rec" rows="3" maxlength="300" placeholder="Ex. : entreprise introuvable, informations incomplètes…"></textarea>
+        <button class="btn danger plein" id="ok-rec" style="margin-top:10px">Confirmer</button>`);
+      $('#ok-rec').onclick = () => appliquer($('#motif-rec').value.trim());
     };
   }
 
@@ -2204,9 +2246,10 @@ async function vueConversation(autre) {
 async function vueMembre(id) {
   if (id === etat.session.user.id) { location.hash = '#/profil'; return; }
   chargement();
-  const [{ data: p, error }, { data: art }] = await Promise.all([
+  const [{ data: p, error }, { data: art }, { data: pro }] = await Promise.all([
     sb.from('profils').select('id, nom_complet, role, cree_le').eq('id', id).maybeSingle(),
-    sb.from('artistes').select('id, nom_scene').eq('profil_id', id).eq('statut', 'valide').maybeSingle()
+    sb.from('artistes').select('id, nom_scene').eq('profil_id', id).eq('statut', 'valide').maybeSingle(),
+    sb.from('profils_pro').select('profil_id, titre').eq('profil_id', id).maybeSingle()
   ]);
   if (error) throw error;
   if (!p) { vue.innerHTML = '<div class="vide">Membre introuvable.</div>'; return; }
@@ -2219,7 +2262,9 @@ async function vueMembre(id) {
     <div class="actions" style="justify-content:flex-start">
       <a class="btn" href="#/messages/${p.id}">✉ Envoyer un message</a>
       ${art ? `<a class="btn secondaire" href="#/a/${art.id}">♪ Voir sa page artiste</a>` : ''}
-    </div>`;
+      ${pro ? `<a class="btn secondaire" href="#/cv/${p.id}">💼 Profil professionnel</a>` : ''}
+    </div>
+    ${pro?.titre ? `<p class="doux">💼 ${esc(pro.titre)}</p>` : ''}`;
 }
 
 // =========================================================
@@ -2307,6 +2352,466 @@ async function carteNotifications(zone) {
     catch (err) { erreur(err); }
     e.target.disabled = false;
   });
+}
+
+// =========================================================
+// PROFIL PROFESSIONNEL (CV) ET RECRUTEURS
+// =========================================================
+const DISPOS = { disponible: 'Disponible tout de suite', a_l_ecoute: 'En poste, ouvert aux offres', indisponible: 'Pas disponible' };
+const TYPES_POSTE = ['Temps plein', 'Temps partiel', 'Stage', 'Mission', 'Bénévolat'];
+const NIVEAUX_COMP = { debutant: 'Débutant', intermediaire: 'Intermédiaire', confirme: 'Confirmé' };
+const NIVEAUX_LANGUE = { notions: 'Notions', courant: 'Courant', maternelle: 'Langue maternelle' };
+const VISIBILITES = {
+  recruteurs: ['Recruteurs validés', 'Seuls les recruteurs validés par l\'administrateur voient votre profil.'],
+  membres: ['Tous les membres', 'Tous les membres connectés de MongongoWay voient votre profil.'],
+  cache: ['Caché', 'Personne d\'autre que vous ne voit votre profil.']
+};
+const moisAnnee = (d) => d ? new Date(d).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }) : '';
+const periode = (x) => [moisAnnee(x.debut), x.en_cours ? 'aujourd\'hui' : moisAnnee(x.fin)].filter(Boolean).join(' – ');
+async function urlFichierPro(path) {
+  if (!path) return '';
+  const { data } = await sb.storage.from('profils-pro').createSignedUrl(path, 3600);
+  return data?.signedUrl || '';
+}
+async function monStatutRecruteur() {
+  if (!etat.session) return null;
+  const { data } = await sb.from('recruteurs').select('*').eq('profil_id', etat.session.user.id).maybeSingle();
+  return data;
+}
+function lienExterne(u) {
+  const s = String(u || '').trim();
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : 'https://' + s;
+}
+
+// ---------- Édition de MON profil professionnel ----------
+async function vuePro() {
+  chargement();
+  const uid = etat.session.user.id;
+  const [{ data: pp }, { data: exps }, { data: forms }, { data: comps }, { data: langs }, { data: recos }] = await Promise.all([
+    sb.from('profils_pro').select('*').eq('profil_id', uid).maybeSingle(),
+    sb.from('experiences').select('*').eq('profil_id', uid).order('en_cours', { ascending: false }).order('debut', { ascending: false, nullsFirst: false }),
+    sb.from('formations').select('*').eq('profil_id', uid).order('annee', { ascending: false, nullsFirst: false }),
+    sb.from('competences').select('*').eq('profil_id', uid).order('nom'),
+    sb.from('langues').select('*').eq('profil_id', uid).order('langue'),
+    sb.from('recommandations').select('*, profils!auteur_id(nom_complet)').eq('profil_id', uid).order('cree_le', { ascending: false })
+  ]);
+  const p = pp || { visibilite: 'recruteurs', disponibilite: 'disponible', types_poste: [] };
+  const photo = await urlFichierPro(p.photo_path);
+  const ligneListe = (txt, sous, attrs) => `<div class="pro-ligne"><div style="flex:1;min-width:0"><b>${txt}</b>${sous ? `<div class="doux petit">${sous}</div>` : ''}</div>
+      <button class="lien-bouton" ${attrs}-modif title="Modifier">✎</button><button class="lien-bouton" ${attrs}-suppr title="Supprimer" style="color:var(--rouge)">🗑</button></div>`;
+
+  vue.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h1 style="margin:0">Mon profil professionnel</h1>
+      ${pp ? `<a class="btn secondaire petit" href="#/cv/${uid}">👁 Voir comme un recruteur</a>` : ''}
+    </div>
+    <p class="doux">Présentez votre parcours pour être repéré par les recruteurs. Votre téléphone n'est jamais affiché : on vous contacte par la messagerie.</p>
+
+    <form id="form-pro" class="carte">
+      <h3 style="margin-top:0">Présentation</h3>
+      <div class="pro-photo">
+        <div class="avatar grand-avatar">${photo ? `<img src="${esc(photo)}" alt="">` : esc((etat.profil?.nom_complet || '?').charAt(0).toUpperCase())}</div>
+        <label class="lien-photo">📷 ${photo ? 'Changer la photo' : 'Ajouter une photo'}<input type="file" id="pro-photo" accept="image/*" class="cache"></label>
+      </div>
+      <label for="pro-titre">Titre (en une ligne)</label>
+      <input id="pro-titre" maxlength="120" value="${esc(p.titre || '')}" placeholder="Ex. : Comptable · 5 ans d'expérience">
+      <div class="deux-col">
+        <div><label for="pro-ville">Ville</label><input id="pro-ville" maxlength="60" value="${esc(p.ville || '')}" placeholder="Ex. : Kinshasa"></div>
+        <div><label for="pro-dispo">Disponibilité</label><select id="pro-dispo">${Object.entries(DISPOS).map(([k, v]) => `<option value="${k}" ${p.disponibilite === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      </div>
+      <label>Type de poste recherché</label>
+      <div class="cases">${TYPES_POSTE.map((t) => `<label class="case"><input type="checkbox" name="types" value="${t}" ${(p.types_poste || []).includes(t) ? 'checked' : ''}> ${t}</label>`).join('')}</div>
+      <label for="pro-resume">Résumé</label>
+      <textarea id="pro-resume" rows="4" maxlength="1500" placeholder="Quelques lignes pour vous présenter : ce que vous savez faire, ce que vous recherchez.">${esc(p.resume || '')}</textarea>
+      <label for="pro-permis">Permis de conduire (facultatif)</label>
+      <input id="pro-permis" maxlength="40" value="${esc(p.permis || '')}" placeholder="Ex. : Catégorie B">
+      <label>Liens (facultatif)</label>
+      <input id="pro-linkedin" maxlength="200" value="${esc(p.lien_linkedin || '')}" placeholder="LinkedIn">
+      <input id="pro-site" maxlength="200" value="${esc(p.lien_site || '')}" placeholder="Site ou portfolio" style="margin-top:8px">
+      <input id="pro-youtube" maxlength="200" value="${esc(p.lien_youtube || '')}" placeholder="YouTube" style="margin-top:8px">
+      <label>Qui peut voir mon profil professionnel ?</label>
+      <div class="choix-visibilite">${Object.entries(VISIBILITES).map(([k, [t, d]]) => `
+        <label class="option-radio"><input type="radio" name="visi" value="${k}" ${p.visibilite === k ? 'checked' : ''}><span><b>${t}</b><span class="doux petit">${d}</span></span></label>`).join('')}</div>
+      <button class="btn plein" type="submit" style="margin-top:14px">${pp ? 'Enregistrer' : 'Créer mon profil professionnel'}</button>
+    </form>
+
+    <div id="sections-pro" class="${pp ? '' : 'grise'}">
+      ${pp ? '' : '<p class="doux petit" style="text-align:center">Enregistrez d\'abord la présentation ci-dessus pour ajouter votre parcours.</p>'}
+      <div class="carte">
+        <div class="titre-section"><h3>Expériences</h3><button class="btn petit secondaire" data-ajout="experience">+ Ajouter</button></div>
+        ${(exps || []).map((x) => ligneListe(esc(x.poste) + (x.employeur ? ` · ${esc(x.employeur)}` : ''), esc([periode(x), x.ville].filter(Boolean).join(' · ')), `data-exp="${x.id}" data-a`)).join('') || '<p class="doux petit">Aucune expérience pour le moment.</p>'}
+      </div>
+      <div class="carte">
+        <div class="titre-section"><h3>Formations et certificats</h3><button class="btn petit secondaire" data-ajout="formation">+ Ajouter</button></div>
+        ${(forms || []).map((x) => ligneListe((x.genre === 'certificat' ? '📜 ' : '🎓 ') + esc(x.intitule), esc([x.etablissement, x.annee].filter(Boolean).join(' · ')), `data-form="${x.id}" data-a`)).join('') || '<p class="doux petit">Aucune formation pour le moment.</p>'}
+      </div>
+      <div class="carte">
+        <h3 style="margin-top:0">Compétences</h3>
+        <div class="puces">${(comps || []).map((c) => `<span class="puce">${esc(c.nom)} <small>${NIVEAUX_COMP[c.niveau]}</small><button data-suppr-comp="${c.id}" title="Retirer">×</button></span>`).join('') || '<span class="doux petit">Aucune compétence pour le moment.</span>'}</div>
+        <form id="form-comp" class="ajout-ligne">
+          <input id="comp-nom" maxlength="60" placeholder="Ex. : Excel, comptabilité, chant, conduite…" list="idees-comp" required>
+          <datalist id="idees-comp">${['Excel', 'Word', 'Comptabilité', 'Gestion de projet', 'Secrétariat', 'Informatique', 'Vente', 'Marketing', 'Chant', 'Piano', 'Guitare', 'Batterie', 'Sonorisation', 'Photographie', 'Montage vidéo', 'Conduite', 'Enseignement', 'Couture', 'Cuisine', 'Électricité', 'Maçonnerie'].map((x) => `<option value="${x}">`).join('')}</datalist>
+          <select id="comp-niveau">${Object.entries(NIVEAUX_COMP).map(([k, v]) => `<option value="${k}" ${k === 'intermediaire' ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <button class="btn petit" type="submit">Ajouter</button>
+        </form>
+      </div>
+      <div class="carte">
+        <h3 style="margin-top:0">Langues</h3>
+        <div class="puces">${(langs || []).map((l) => `<span class="puce">${esc(l.langue)} <small>${NIVEAUX_LANGUE[l.niveau]}</small><button data-suppr-langue="${l.id}" title="Retirer">×</button></span>`).join('') || '<span class="doux petit">Aucune langue pour le moment.</span>'}</div>
+        <form id="form-langue" class="ajout-ligne">
+          <input id="langue-nom" maxlength="40" placeholder="Ex. : Lingala, Français, Anglais, Swahili" list="idees-langue" required>
+          <datalist id="idees-langue">${['Lingala', 'Français', 'Anglais', 'Swahili', 'Kikongo', 'Tshiluba', 'Portugais', 'Espagnol'].map((x) => `<option value="${x}">`).join('')}</datalist>
+          <select id="langue-niveau">${Object.entries(NIVEAUX_LANGUE).map(([k, v]) => `<option value="${k}" ${k === 'courant' ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          <button class="btn petit" type="submit">Ajouter</button>
+        </form>
+      </div>
+      <div class="carte">
+        <h3 style="margin-top:0">CV en PDF</h3>
+        ${p.cv_path ? `<p>📄 Un CV est joint à votre profil.</p><div class="boutons"><button class="btn secondaire petit" id="voir-cv">Ouvrir</button><button class="btn danger petit" id="suppr-cv">Retirer</button></div>` : '<p class="doux petit">Facultatif : joignez votre CV complet (PDF, 5 Mo maximum).</p>'}
+        <label class="btn secondaire petit" style="display:inline-block;margin-top:8px">${p.cv_path ? 'Remplacer le CV' : '+ Joindre mon CV (PDF)'}<input type="file" id="cv-fichier" accept="application/pdf,.pdf" class="cache"></label>
+      </div>
+      <div class="carte">
+        <h3 style="margin-top:0">Recommandations reçues</h3>
+        ${(recos || []).map((r) => `<div class="reco"><p>« ${texteRiche(r.texte)} »</p><div class="doux petit">— ${esc(r.profils?.nom_complet || 'Membre')}, ${dateCourte(r.cree_le)} <button class="lien-bouton" data-suppr-reco="${r.id}" style="color:var(--rouge)">Retirer</button></div></div>`).join('')
+          || '<p class="doux petit">Aucune recommandation pour le moment. Les membres qui voient votre profil peuvent vous recommander.</p>'}
+      </div>
+    </div>`;
+
+  const assurerProfil = async () => {
+    const { error } = await sb.from('profils_pro').upsert({ profil_id: uid }, { onConflict: 'profil_id', ignoreDuplicates: true });
+    if (error) throw error;
+  };
+
+  // Présentation
+  $('#form-pro').onsubmit = async (e) => {
+    e.preventDefault();
+    const b = e.submitter; b.disabled = true;
+    const donnees = {
+      profil_id: uid, titre: $('#pro-titre').value.trim() || null, ville: $('#pro-ville').value.trim() || null,
+      disponibilite: $('#pro-dispo').value, types_poste: $$('[name=types]:checked').map((x) => x.value),
+      resume: $('#pro-resume').value.trim() || null, permis: $('#pro-permis').value.trim() || null,
+      lien_linkedin: $('#pro-linkedin').value.trim() || null, lien_site: $('#pro-site').value.trim() || null, lien_youtube: $('#pro-youtube').value.trim() || null,
+      visibilite: ($('[name=visi]:checked') || {}).value || 'recruteurs'
+    };
+    const { error } = await sb.from('profils_pro').upsert(donnees, { onConflict: 'profil_id' });
+    b.disabled = false;
+    if (error) return erreur(error);
+    toast(pp ? 'Profil enregistré.' : 'Profil professionnel créé. Ajoutez maintenant votre parcours.');
+    vuePro();
+  };
+  // Photo
+  $('#pro-photo').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const img = await preparerPhoto(f);
+      await assurerProfil();
+      const chemin = `${uid}/photo-${Date.now()}.jpg`;
+      const { error } = await sb.storage.from('profils-pro').upload(chemin, img, { contentType: 'image/jpeg', upsert: true });
+      if (error) throw error;
+      const ancien = p.photo_path;
+      const { error: e2 } = await sb.from('profils_pro').update({ photo_path: chemin }).eq('profil_id', uid);
+      if (e2) throw e2;
+      if (ancien) sb.storage.from('profils-pro').remove([ancien]);
+      toast('Photo enregistrée.'); vuePro();
+    } catch (err) { erreur(err); }
+  };
+  // CV PDF
+  $('#cv-fichier').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 5 * 1024 * 1024) return toast('Le CV dépasse 5 Mo.', true);
+    try {
+      const donneesPdf = new Blob([await f.arrayBuffer()], { type: 'application/pdf' });
+      await assurerProfil();
+      const chemin = `${uid}/cv-${Date.now()}.pdf`;
+      toast('Envoi du CV…');
+      const { error } = await sb.storage.from('profils-pro').upload(chemin, donneesPdf, { contentType: 'application/pdf', upsert: true });
+      if (error) throw error;
+      const ancien = p.cv_path;
+      const { error: e2 } = await sb.from('profils_pro').update({ cv_path: chemin }).eq('profil_id', uid);
+      if (e2) throw e2;
+      if (ancien) sb.storage.from('profils-pro').remove([ancien]);
+      toast('CV joint à votre profil.'); vuePro();
+    } catch (err) { erreur(err); }
+  };
+  $('#voir-cv')?.addEventListener('click', async () => { const u = await urlFichierPro(p.cv_path); if (u) window.open(u, '_blank'); });
+  $('#suppr-cv')?.addEventListener('click', async () => {
+    await sb.from('profils_pro').update({ cv_path: null }).eq('profil_id', uid);
+    sb.storage.from('profils-pro').remove([p.cv_path]);
+    toast('CV retiré.'); vuePro();
+  });
+
+  // Expériences et formations : fenêtre d'ajout / modification
+  const formExperience = (x = {}) => {
+    ouvrirModale(`<h2 style="margin-top:0">${x.id ? 'Modifier' : 'Ajouter'} une expérience</h2>
+      <form id="f-exp">
+        <label for="x-poste">Poste</label><input id="x-poste" required maxlength="120" value="${esc(x.poste || '')}" placeholder="Ex. : Assistant comptable">
+        <label for="x-emp">Employeur</label><input id="x-emp" maxlength="120" value="${esc(x.employeur || '')}">
+        <label for="x-ville">Ville</label><input id="x-ville" maxlength="60" value="${esc(x.ville || '')}">
+        <div class="deux-col">
+          <div><label for="x-debut">Début</label><input id="x-debut" type="month" value="${x.debut ? String(x.debut).slice(0, 7) : ''}"></div>
+          <div><label for="x-fin">Fin</label><input id="x-fin" type="month" value="${x.fin ? String(x.fin).slice(0, 7) : ''}" ${x.en_cours ? 'disabled' : ''}></div>
+        </div>
+        <label class="case" style="margin-top:8px"><input type="checkbox" id="x-encours" ${x.en_cours ? 'checked' : ''}> J'occupe toujours ce poste</label>
+        <label for="x-missions">Missions principales</label><textarea id="x-missions" rows="4" maxlength="1500">${esc(x.missions || '')}</textarea>
+        <button class="btn plein" type="submit" style="margin-top:12px">Enregistrer</button>
+      </form>`);
+    $('#x-encours').onchange = (e) => { $('#x-fin').disabled = e.target.checked; };
+    $('#f-exp').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await assurerProfil();
+        const d = { profil_id: uid, poste: $('#x-poste').value.trim(), employeur: $('#x-emp').value.trim() || null, ville: $('#x-ville').value.trim() || null,
+          debut: $('#x-debut').value ? $('#x-debut').value + '-01' : null, en_cours: $('#x-encours').checked,
+          fin: !$('#x-encours').checked && $('#x-fin').value ? $('#x-fin').value + '-01' : null, missions: $('#x-missions').value.trim() || null };
+        const { error } = x.id ? await sb.from('experiences').update(d).eq('id', x.id) : await sb.from('experiences').insert(d);
+        if (error) throw error;
+        fermerModale(); toast('Expérience enregistrée.'); vuePro();
+      } catch (err) { erreur(err); }
+    };
+  };
+  const formFormation = (x = {}) => {
+    ouvrirModale(`<h2 style="margin-top:0">${x.id ? 'Modifier' : 'Ajouter'} une formation</h2>
+      <form id="f-form">
+        <label>Type</label>
+        <div class="cases"><label class="case"><input type="radio" name="genre" value="diplome" ${x.genre !== 'certificat' ? 'checked' : ''}> Diplôme</label>
+        <label class="case"><input type="radio" name="genre" value="certificat" ${x.genre === 'certificat' ? 'checked' : ''}> Certificat / formation courte</label></div>
+        <label for="y-intitule">Intitulé</label><input id="y-intitule" required maxlength="160" value="${esc(x.intitule || '')}" placeholder="Ex. : Licence en bases de données">
+        <label for="y-etab">Établissement ou organisme</label><input id="y-etab" maxlength="120" value="${esc(x.etablissement || '')}" placeholder="Ex. : ISIPA">
+        <label for="y-annee">Année</label><input id="y-annee" type="number" min="1950" max="2100" value="${x.annee || ''}" placeholder="Ex. : 2016">
+        <button class="btn plein" type="submit" style="margin-top:12px">Enregistrer</button>
+      </form>`);
+    $('#f-form').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await assurerProfil();
+        const d = { profil_id: uid, genre: $('[name=genre]:checked').value, intitule: $('#y-intitule').value.trim(),
+          etablissement: $('#y-etab').value.trim() || null, annee: $('#y-annee').value ? Number($('#y-annee').value) : null };
+        const { error } = x.id ? await sb.from('formations').update(d).eq('id', x.id) : await sb.from('formations').insert(d);
+        if (error) throw error;
+        fermerModale(); toast('Formation enregistrée.'); vuePro();
+      } catch (err) { erreur(err); }
+    };
+  };
+  const confirmerSuppression = (quoi, action) => {
+    ouvrirModale(`<h2 style="margin-top:0">Supprimer ${quoi} ?</h2>
+      <button class="btn danger plein" id="ok-suppr">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+    $('#ok-suppr').onclick = async () => { const { error } = await action(); if (error) return erreur(error); fermerModale(); vuePro(); };
+  };
+
+  $('#sections-pro').onclick = async (e) => {
+    const t = e.target;
+    if (t.closest('[data-ajout="experience"]')) return formExperience();
+    if (t.closest('[data-ajout="formation"]')) return formFormation();
+    const exp = t.closest('[data-exp]'), frm = t.closest('[data-form]');
+    if (exp) {
+      const x = exps.find((y) => y.id === exp.dataset.exp);
+      if (t.closest('[data-a-modif]')) return formExperience(x);
+      if (t.closest('[data-a-suppr]')) return confirmerSuppression('cette expérience', () => sb.from('experiences').delete().eq('id', x.id));
+    }
+    if (frm) {
+      const x = forms.find((y) => y.id === frm.dataset.form);
+      if (t.closest('[data-a-modif]')) return formFormation(x);
+      if (t.closest('[data-a-suppr]')) return confirmerSuppression('cette formation', () => sb.from('formations').delete().eq('id', x.id));
+    }
+    const sc = t.closest('[data-suppr-comp]'), sl = t.closest('[data-suppr-langue]'), sr = t.closest('[data-suppr-reco]');
+    if (sc) { await sb.from('competences').delete().eq('id', sc.dataset.supprComp); return vuePro(); }
+    if (sl) { await sb.from('langues').delete().eq('id', sl.dataset.supprLangue); return vuePro(); }
+    if (sr) return confirmerSuppression('cette recommandation', () => sb.from('recommandations').delete().eq('id', sr.dataset.supprReco));
+  };
+  $('#form-comp').onsubmit = async (e) => {
+    e.preventDefault();
+    const nom = $('#comp-nom').value.trim(); if (!nom) return;
+    try {
+      await assurerProfil();
+      const { error } = await sb.from('competences').upsert({ profil_id: uid, nom: nom.charAt(0).toUpperCase() + nom.slice(1), niveau: $('#comp-niveau').value }, { onConflict: 'profil_id,nom' });
+      if (error) throw error;
+      vuePro();
+    } catch (err) { erreur(err); }
+  };
+  $('#form-langue').onsubmit = async (e) => {
+    e.preventDefault();
+    const l = $('#langue-nom').value.trim(); if (!l) return;
+    try {
+      await assurerProfil();
+      const { error } = await sb.from('langues').upsert({ profil_id: uid, langue: l.charAt(0).toUpperCase() + l.slice(1), niveau: $('#langue-niveau').value }, { onConflict: 'profil_id,langue' });
+      if (error) throw error;
+      vuePro();
+    } catch (err) { erreur(err); }
+  };
+}
+
+// ---------- Vue « CV » d'un membre (ce que voit un recruteur) ----------
+async function vueCv(id) {
+  chargement();
+  const uid = etat.session.user.id;
+  const [{ data: pp, error }, { data: prof }, { data: exps }, { data: forms }, { data: comps }, { data: langs }, { data: recos }, { data: art }] = await Promise.all([
+    sb.from('profils_pro').select('*').eq('profil_id', id).maybeSingle(),
+    sb.from('profils').select('id, nom_complet').eq('id', id).maybeSingle(),
+    sb.from('experiences').select('*').eq('profil_id', id).order('en_cours', { ascending: false }).order('debut', { ascending: false, nullsFirst: false }),
+    sb.from('formations').select('*').eq('profil_id', id).order('annee', { ascending: false, nullsFirst: false }),
+    sb.from('competences').select('*').eq('profil_id', id).order('nom'),
+    sb.from('langues').select('*').eq('profil_id', id).order('langue'),
+    sb.from('recommandations').select('*, profils!auteur_id(nom_complet)').eq('profil_id', id).order('cree_le', { ascending: false }),
+    sb.from('artistes').select('id, nom_scene, titres(id, titre, nb_ecoutes, statut)').eq('profil_id', id).eq('statut', 'valide').maybeSingle()
+  ]);
+  if (error) throw error;
+  if (!pp) {
+    vue.innerHTML = `<div class="vide"><span class="grand">🔒</span>${id === uid ? 'Vous n\'avez pas encore de profil professionnel.<br><a class="btn" href="#/pro" style="margin-top:12px">Créer mon profil</a>' : 'Ce profil professionnel n\'est pas visible pour vous.'}</div>`;
+    return;
+  }
+  const nom = prof?.nom_complet || 'Membre';
+  const photo = await urlFichierPro(pp.photo_path);
+  const titresArt = (art?.titres || []).filter((t) => t.statut === 'publie');
+  const dejaRecommande = (recos || []).some((r) => r.auteur_id === uid);
+  const liens = [['LinkedIn', pp.lien_linkedin], ['Site / portfolio', pp.lien_site], ['YouTube', pp.lien_youtube]].filter(([, u]) => u);
+
+  vue.innerHTML = `
+    ${id === uid ? `<div class="bandeau-info">👁 Voici votre profil tel que le voient les autres (${VISIBILITES[pp.visibilite][0].toLowerCase()}). <a href="#/pro">Modifier</a></div>` : ''}
+    <div class="cv-tete carte">
+      <div class="avatar grand-avatar">${photo ? `<img src="${esc(photo)}" alt="">` : esc(nom.charAt(0).toUpperCase())}</div>
+      <div style="flex:1;min-width:0">
+        <h1 style="margin:0">${esc(nom)}</h1>
+        ${pp.titre ? `<div class="cv-titre">${esc(pp.titre)}</div>` : ''}
+        <div class="doux petit">${[pp.ville ? '📍 ' + esc(pp.ville) : '', pp.permis ? '🚗 Permis ' + esc(pp.permis) : ''].filter(Boolean).join(' · ')}</div>
+        <div class="puces" style="margin-top:8px"><span class="dispo dispo-${pp.disponibilite}">${DISPOS[pp.disponibilite]}</span>${(pp.types_poste || []).map((t) => `<span class="badge">${esc(t)}</span>`).join('')}</div>
+      </div>
+    </div>
+    ${id !== uid ? `<div class="actions" style="justify-content:flex-start">
+      <a class="btn" href="#/messages/${id}">✉ Contacter</a>
+      ${pp.cv_path ? '<button class="btn secondaire" id="ouvrir-cv">📄 CV en PDF</button>' : ''}
+      ${!dejaRecommande ? '<button class="btn secondaire" id="recommander">👍 Recommander</button>' : ''}
+    </div>` : pp.cv_path ? '<div class="actions" style="justify-content:flex-start"><button class="btn secondaire" id="ouvrir-cv">📄 CV en PDF</button></div>' : ''}
+    ${pp.resume ? `<div class="carte"><h3 style="margin-top:0">Présentation</h3><p style="margin:0">${texteRiche(pp.resume)}</p></div>` : ''}
+    <div class="deux-col-cv">
+      <div>
+        ${exps?.length ? `<div class="carte"><h3 style="margin-top:0">Expériences</h3>${exps.map((x) => `
+          <div class="cv-element"><b>${esc(x.poste)}</b>${x.employeur ? ` · ${esc(x.employeur)}` : ''}
+            <div class="doux petit">${esc([periode(x), x.ville].filter(Boolean).join(' · '))}</div>
+            ${x.missions ? `<p class="petit" style="margin:6px 0 0">${texteRiche(x.missions)}</p>` : ''}</div>`).join('')}</div>` : ''}
+        ${forms?.length ? `<div class="carte"><h3 style="margin-top:0">Formations et certificats</h3>${forms.map((x) => `
+          <div class="cv-element">${x.genre === 'certificat' ? '📜' : '🎓'} <b>${esc(x.intitule)}</b><div class="doux petit">${esc([x.etablissement, x.annee].filter(Boolean).join(' · '))}</div></div>`).join('')}</div>` : ''}
+      </div>
+      <div>
+        ${comps?.length ? `<div class="carte"><h3 style="margin-top:0">Compétences</h3><div class="puces">${comps.map((c) => `<span class="puce niveau-${c.niveau}">${esc(c.nom)} <small>${NIVEAUX_COMP[c.niveau]}</small></span>`).join('')}</div></div>` : ''}
+        ${langs?.length ? `<div class="carte"><h3 style="margin-top:0">Langues</h3>${langs.map((l) => `<div class="cv-element"><b>${esc(l.langue)}</b> <span class="doux petit">· ${NIVEAUX_LANGUE[l.niveau]}</span></div>`).join('')}</div>` : ''}
+        ${titresArt.length ? `<div class="carte"><h3 style="margin-top:0">Réalisations sur MongongoWay</h3><div class="doux petit" style="margin-bottom:6px">Artiste : <a href="#/a/${art.id}">${esc(art.nom_scene)}</a></div>
+          ${titresArt.map((t) => `<div class="cv-element">♪ <a href="#/titre/${t.id}">${esc(t.titre)}</a> <span class="doux petit">· ${t.nb_ecoutes} lecture${t.nb_ecoutes > 1 ? 's' : ''}</span></div>`).join('')}</div>` : ''}
+        ${liens.length ? `<div class="carte"><h3 style="margin-top:0">Liens</h3>${liens.map(([n, u]) => `<div class="cv-element"><a href="${esc(lienExterne(u))}" target="_blank" rel="noopener noreferrer">${n} ↗</a></div>`).join('')}</div>` : ''}
+      </div>
+    </div>
+    <div class="carte"><h3 style="margin-top:0">Recommandations</h3>
+      ${(recos || []).map((r) => `<div class="reco"><p>« ${texteRiche(r.texte)} »</p><div class="doux petit">— <a href="#/membre/${r.auteur_id}">${esc(r.profils?.nom_complet || 'Membre')}</a>, ${dateCourte(r.cree_le)}</div></div>`).join('') || '<p class="doux petit">Aucune recommandation pour le moment.</p>'}
+    </div>
+    <p class="doux petit" style="text-align:center">Profil mis à jour le ${dateCourte(pp.mis_a_jour_le)}</p>`;
+
+  $('#ouvrir-cv')?.addEventListener('click', async () => { const u = await urlFichierPro(pp.cv_path); if (u) window.open(u, '_blank'); else toast('CV indisponible.', true); });
+  $('#recommander')?.addEventListener('click', () => {
+    ouvrirModale(`<h2 style="margin-top:0">Recommander ${esc(nom)}</h2>
+      <p class="doux petit">Dites en quelques lignes pourquoi vous recommandez cette personne (travail, qualités, sérieux…). Votre nom sera affiché.</p>
+      <textarea id="reco-texte" rows="5" maxlength="800" placeholder="Ex. : J'ai travaillé avec … pendant deux ans : rigoureux, ponctuel et de confiance."></textarea>
+      <button class="btn plein" id="ok-reco" style="margin-top:10px">Publier ma recommandation</button>`);
+    $('#ok-reco').onclick = async () => {
+      const texte = $('#reco-texte').value.trim();
+      if (texte.length < 10) return toast('Écrivez au moins quelques mots (10 caractères).', true);
+      const { error: e2 } = await sb.from('recommandations').insert({ profil_id: id, auteur_id: uid, texte });
+      if (e2) return erreur(e2);
+      fermerModale(); toast('Merci ! Votre recommandation est publiée.'); vueCv(id);
+    };
+  });
+}
+
+// ---------- Espace recruteur : demande, puis recherche de candidats ----------
+async function vueRecruteur() {
+  chargement();
+  const demande = await monStatutRecruteur();
+  if (estAdmin() || demande?.statut === 'valide') return rechercheCandidats(demande);
+  if (demande?.statut === 'en_attente') {
+    vue.innerHTML = `<h1>Espace recruteur</h1>
+      <div class="carte"><h3 style="margin-top:0">⏳ Demande en cours de validation</h3>
+        <p>Votre demande pour <b>${esc(demande.entreprise)}</b> a été envoyée le ${dateCourte(demande.cree_le)}. L'administrateur va la vérifier ; vous aurez ensuite accès à la recherche de candidats.</p>
+        <button class="btn secondaire petit" id="modif-demande">Modifier ma demande</button></div>`;
+    $('#modif-demande').onclick = () => formulaireRecruteur(demande);
+    return;
+  }
+  vue.innerHTML = `<h1>Espace recruteur</h1>
+    ${demande?.statut === 'refuse' ? `<div class="carte" style="border-color:var(--rouge)"><b>Votre demande n'a pas été acceptée.</b>${demande.motif_refus ? `<p class="doux">Motif : ${esc(demande.motif_refus)}</p>` : ''}<p class="petit">Vous pouvez la corriger et la renvoyer.</p></div>` : ''}
+    <p class="doux">Vous recrutez pour une entreprise, une église, une association ou un projet ? Après validation par l'administrateur, vous pourrez rechercher des candidats parmi les membres et les contacter par message.</p>
+    <div id="zone-form-rec"></div>`;
+  formulaireRecruteur(demande, $('#zone-form-rec'));
+}
+function formulaireRecruteur(d = {}, zone = null) {
+  const html = `<form id="form-rec" class="carte">
+      <h3 style="margin-top:0">${d?.entreprise ? 'Modifier ma demande' : 'Devenir recruteur'}</h3>
+      <label for="r-ent">Entreprise ou organisation</label><input id="r-ent" required maxlength="120" value="${esc(d?.entreprise || '')}">
+      <div class="deux-col">
+        <div><label for="r-sect">Secteur d'activité</label><input id="r-sect" maxlength="80" value="${esc(d?.secteur || '')}" placeholder="Ex. : Banque, ONG, Musique"></div>
+        <div><label for="r-ville">Ville</label><input id="r-ville" maxlength="60" value="${esc(d?.ville || '')}"></div>
+      </div>
+      <label for="r-site">Site web (facultatif)</label><input id="r-site" maxlength="200" value="${esc(d?.site_web || '')}">
+      <label for="r-motif">Quels profils recherchez-vous ?</label><textarea id="r-motif" rows="3" maxlength="800">${esc(d?.motif || '')}</textarea>
+      <button class="btn plein" type="submit" style="margin-top:12px">Envoyer ma demande</button>
+    </form>`;
+  if (zone) zone.innerHTML = html; else { ouvrirModale(html); }
+  $('#form-rec').onsubmit = async (e) => {
+    e.preventDefault();
+    const b = e.submitter; b.disabled = true;
+    const { error } = await sb.from('recruteurs').upsert({
+      profil_id: etat.session.user.id, entreprise: $('#r-ent').value.trim(), secteur: $('#r-sect').value.trim() || null,
+      ville: $('#r-ville').value.trim() || null, site_web: $('#r-site').value.trim() || null, motif: $('#r-motif').value.trim() || null
+    }, { onConflict: 'profil_id' });
+    b.disabled = false;
+    if (error) return erreur(error);
+    if (!zone) fermerModale();
+    toast('Demande envoyée à l\'administrateur.'); vueRecruteur();
+  };
+}
+async function rechercheCandidats(demande) {
+  const { data, error } = await sb.from('profils_pro')
+    .select('profil_id, titre, ville, disponibilite, types_poste, photo_path, mis_a_jour_le, profils(nom_complet), competences(nom, niveau), langues(langue)')
+    .neq('profil_id', etat.session.user.id).order('mis_a_jour_le', { ascending: false }).limit(500);
+  if (error) throw error;
+  const tous = (data || []).filter((c) => c.titre || c.competences?.length);
+  const villes = [...new Set(tous.map((c) => (c.ville || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+  const langues = [...new Set(tous.flatMap((c) => (c.langues || []).map((l) => l.langue)))].sort((a, b) => a.localeCompare(b, 'fr'));
+  vue.innerHTML = `
+    <h1>Rechercher des candidats</h1>
+    <p class="doux">${estAdmin() && demande?.statut !== 'valide' ? 'Accès administrateur. ' : demande ? `Recruteur pour <b>${esc(demande.entreprise)}</b>. ` : ''}Seuls les profils que leurs auteurs ont rendus visibles aux recruteurs apparaissent ici.</p>
+    <div class="filtres-cand carte">
+      <input id="f-q" type="search" placeholder="Compétence, métier ou nom (ex. : comptable, Excel, piano)">
+      <select id="f-ville"><option value="">Toutes les villes</option>${villes.map((v) => `<option>${esc(v)}</option>`).join('')}</select>
+      <select id="f-langue"><option value="">Toutes les langues</option>${langues.map((v) => `<option>${esc(v)}</option>`).join('')}</select>
+      <select id="f-dispo"><option value="">Toutes disponibilités</option>${Object.entries(DISPOS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+    </div>
+    <div id="nb-cand" class="doux petit" style="margin:4px 0 10px"></div>
+    <div id="liste-cand" class="liste"></div>`;
+  const photos = {};
+  await Promise.all(tous.filter((c) => c.photo_path).map(async (c) => { photos[c.profil_id] = await urlFichierPro(c.photo_path); }));
+  const sansAccent = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const afficher = () => {
+    const q = sansAccent($('#f-q').value.trim()), v = $('#f-ville').value, l = $('#f-langue').value, d = $('#f-dispo').value;
+    const res = tous.filter((c) => {
+      if (v && (c.ville || '').trim() !== v) return false;
+      if (l && !(c.langues || []).some((x) => x.langue === l)) return false;
+      if (d && c.disponibilite !== d) return false;
+      if (!q) return true;
+      const texte = sansAccent([c.titre, c.profils?.nom_complet, c.ville, ...(c.competences || []).map((x) => x.nom)].join(' '));
+      return q.split(/\s+/).every((mot) => texte.includes(mot));
+    });
+    $('#nb-cand').textContent = `${res.length} candidat${res.length > 1 ? 's' : ''}`;
+    $('#liste-cand').innerHTML = res.map((c) => `
+      <a class="ligne-titre carte-cand" href="#/cv/${c.profil_id}">
+        <div class="avatar petit-avatar">${photos[c.profil_id] ? `<img src="${esc(photos[c.profil_id])}" alt="">` : esc((c.profils?.nom_complet || '?').charAt(0).toUpperCase())}</div>
+        <div class="lt-infos">
+          <div class="lt-titre">${esc(c.profils?.nom_complet || 'Membre')}</div>
+          <div class="lt-artiste">${esc(c.titre || '')}${c.ville ? ' · ' + esc(c.ville) : ''}</div>
+          <div class="puces mini">${(c.competences || []).slice(0, 4).map((x) => `<span class="puce">${esc(x.nom)}</span>`).join('')}</div>
+        </div>
+        <span class="dispo dispo-${c.disponibilite}" title="${DISPOS[c.disponibilite]}">${c.disponibilite === 'disponible' ? 'Disponible' : c.disponibilite === 'a_l_ecoute' ? 'À l\'écoute' : 'Indisponible'}</span>
+      </a>`).join('') || '<div class="vide"><span class="grand">🔎</span>Aucun candidat ne correspond à cette recherche.</div>';
+  };
+  ['#f-q', '#f-ville', '#f-langue', '#f-dispo'].forEach((s) => $(s).addEventListener('input', afficher));
+  afficher();
 }
 
 // =========================================================
