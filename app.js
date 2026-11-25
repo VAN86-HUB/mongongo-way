@@ -189,6 +189,7 @@ async function router() {
   clearInterval(minuterieConversation);
   majBadgeMessages();
   majAlertesAdmin();
+  majBadgeFil();
   window.scrollTo(0, 0);
   try {
     await (routes[nom] || vueAccueil)(param);
@@ -1753,14 +1754,19 @@ async function vueFil(onglet = 'actualites') {
   chargement();
   const uid = etat.session.user.id;
   const type = onglet === 'evenements' ? 'evenement' : 'message';
-  const [{ data: pubs, error }, { data: mesJaimes }] = await Promise.all([
+  const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }] = await Promise.all([
     sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type)
       .or(`statut.eq.publie,auteur_id.eq.${uid}`)
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
-    sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid)
+    sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid),
+    sb.rpc('nouveautes_fil')
   ]);
   if (error) throw error;
   const aimes = new Set((mesJaimes || []).map((x) => x.publication_id));
+  // Nouveautés depuis la dernière visite de cet onglet
+  const vuAvant = new Date((type === 'message' ? nouveautes?.vu_actualites : nouveautes?.vu_evenements) || 0);
+  const estNouveau = (p) => p.statut === 'publie' && p.auteur_id !== uid && p.publie_le && new Date(p.publie_le) > vuAvant;
+  const nbAutreOnglet = Number((type === 'message' ? nouveautes?.evenements : nouveautes?.actualites) || 0);
   const maintenant = Date.now();
   let liste = pubs || [];
   let html = '';
@@ -1777,9 +1783,10 @@ async function vueFil(onglet = 'actualites') {
 
   vue.innerHTML = `
     <div class="onglets" style="margin-top:0">
-      <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités</button>
-      <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements</button>
+      <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités${type !== 'message' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
+      <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements${type !== 'evenement' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
     </div>
+    ${liste.filter(estNouveau).length ? `<div class="bandeau-nouveautes">✦ <b>${liste.filter(estNouveau).length}</b> ${type === 'message' ? (liste.filter(estNouveau).length > 1 ? 'nouvelles actualités' : 'nouvelle actualité') : (liste.filter(estNouveau).length > 1 ? 'nouveaux événements' : 'nouvel événement')} depuis votre dernière visite</div>` : ''}
     ${type === 'message' ? `
     <form class="carte composeur" id="form-pub">
       <div style="display:flex;gap:12px">
@@ -1810,6 +1817,12 @@ async function vueFil(onglet = 'actualites') {
     <div id="fil">${html}</div>`;
 
   $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/fil/${b.dataset.fil}`; });
+  // Étiquette « Nouveau » sur chaque nouvelle publication, puis l'onglet est marqué comme lu
+  liste.filter(estNouveau).forEach((p) => {
+    const carte = $(`[data-pub="${p.id}"]`);
+    if (carte && !carte.querySelector('.etiquette-nouveau')) { carte.classList.add('nouveau'); carte.insertAdjacentHTML('afterbegin', '<span class="etiquette-nouveau">Nouveau</span>'); }
+  });
+  sb.rpc('marquer_fil_vu', { p_onglet: type === 'message' ? 'actualites' : 'evenements' }).then(() => majBadgeFil());
 
   // Photos choisies (une ou plusieurs), réduites avant envoi
   const photosPub = selecteurPhotos($('#pub-image'), $('#pub-apercu'));
@@ -2124,7 +2137,20 @@ async function majBadgeMessages() {
   pastille.textContent = n > 99 ? '99+' : String(n);
   pastille.classList.toggle('cache', !n);
 }
-setInterval(() => { if (document.visibilityState === 'visible') majBadgeMessages(); }, 60000);
+setInterval(() => { if (document.visibilityState === 'visible') { majBadgeMessages(); majBadgeFil(); } }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majBadgeFil(); });
+
+// Pastille du Fil : nouvelles actualités + nouveaux événements depuis la dernière visite
+async function majBadgeFil() {
+  const pastille = $('#pastille-fil');
+  if (!pastille) return;
+  if (!etat.session) { pastille.classList.add('cache'); return; }
+  const { data } = await sb.rpc('nouveautes_fil');
+  const n = Number(data?.actualites || 0) + Number(data?.evenements || 0);
+  pastille.textContent = n > 99 ? '99+' : String(n);
+  pastille.classList.toggle('cache', !n);
+  pastille.title = `${data?.actualites || 0} actualité(s), ${data?.evenements || 0} événement(s)`;
+}
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majBadgeMessages(); });
 
 function momentMessage(d) {

@@ -515,3 +515,9 @@ html[data-theme=jour] .dispo-a_l_ecoute { color: var(--or-fonce); }
   .deux-col-cv { grid-template-columns: 3fr 2fr; }
   #form-pro, #sections-pro, .cv-tete { max-width: 980px; }
 }
+
+/* Nouveautés du Fil */
+.onglets .pastille { margin-left: 6px; vertical-align: 2px; min-width: 18px; height: 18px; font-size: 10px; }
+.bandeau-nouveautes { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: rgba(232,176,75,.14); border: 1px solid var(--or); font-size: 14px; }
+.carte.pub.nouveau { border-color: var(--or); box-shadow: 0 0 0 1px var(--or) inset; position: relative; }
+.etiquette-nouveau { position: absolute; top: -9px; right: 14px; background: var(--or); color: #1b1405; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; z-index: 1; }
