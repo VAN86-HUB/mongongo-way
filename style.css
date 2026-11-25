@@ -525,3 +525,31 @@ html[data-theme=jour] .dispo-a_l_ecoute { color: var(--or-fonce); }
 /* Événements classés dans le temps */
 .rebours { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--or); background: rgba(232,176,75,.12); padding: 3px 10px; border-radius: 999px; }
 html[data-theme=jour] .rebours { color: var(--or-fonce); }
+
+/* =========================================================
+   STYLE « NUIT DORÉE » (proposition 1, choisie le 25 nov. 2026)
+   ========================================================= */
+body { font-family: 'Sora', 'Outfit', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: -.005em; }
+:root { --rayon: 18px; }
+/* Mode nuit : image de fond floutée sous un voile violet nuit, cartes presque pleines */
+html[data-theme=nuit] {
+  --fond: #120e1f; --fond-2: rgba(29, 24, 48, .9); --carte: rgba(29, 24, 48, .9); --ligne: #352d52;
+  --texte: #f3eefc; --doux: #a99fc4; --or: #e8b04b; --or-fonce: #c8902d; --rouge: #e5484d;
+}
+html[data-theme=nuit] body::after { background: linear-gradient(180deg, rgba(18,14,31,.55) 0%, rgba(18,14,31,.78) 40%, rgba(18,14,31,.9) 100%); }
+html[data-theme=nuit] .entete, html[data-theme=nuit] .nav { background: rgba(18, 14, 31, .94); }
+html[data-theme=nuit] .liste, html[data-theme=nuit] .menu { background: rgba(29, 24, 48, .9); }
+html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); }
+.carte { border-radius: 18px; }
+/* Onglets : pilule, onglet actif en or plein */
+.onglets { background: var(--fond-2); }
+.onglets button { min-height: 44px; }
+.onglets button.actif, html[data-theme=jour] .onglets button.actif { background: var(--or); color: #1b1405; font-weight: 700; box-shadow: none; }
+.onglets button.actif .pastille { border: 2px solid var(--or); }
+/* Avatars et dates d'événement dorés */
+.avatar { background: var(--or); color: #1b1405; }
+.date-evt { background: var(--or); border: 0; border-radius: 12px; padding: 8px 0; }
+.date-evt b { color: #1b1405; }
+.date-evt span, html[data-theme=jour] .date-evt span { color: #1b1405; font-weight: 700; letter-spacing: .06em; }
+/* Boutons « j'aime » et commentaires en pastilles */
+.pub-pied button, .pub-actions button { border-radius: 999px; }
