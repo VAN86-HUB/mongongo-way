@@ -1750,12 +1750,40 @@ const urlImagePub = (p) => (p ? sb.storage.from('publications').getPublicUrl(p).
 const dateEvenement = (d) => new Date(d).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' à ' + new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 const texteRiche = (t) => esc(t || '').replace(/\n/g, '<br>');
 
+// Minuit (début de la journée en cours) à l'heure de Kinshasa
+function debutDuJour() {
+  const ici = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Kinshasa' }));
+  const ecart = new Date() - ici;  // différence entre l'heure du téléphone et celle de Kinshasa
+  ici.setHours(0, 0, 0, 0);
+  return new Date(ici.getTime() + ecart);
+}
+// Jour (à l'heure de Kinshasa) d'une date, sous forme de nombre de jours depuis aujourd'hui
+function joursDepuisAujourdhui(d) {
+  const jour = (x) => { const k = new Date(new Date(x).toLocaleString('en-US', { timeZone: 'Africa/Kinshasa' })); k.setHours(0, 0, 0, 0); return k; };
+  return Math.round((jour(d) - jour(new Date())) / 864e5);
+}
+function compteARebours(d) {
+  const n = joursDepuisAujourdhui(d);
+  if (n <= 0) {
+    const min = Math.round((new Date(d) - Date.now()) / 60000);
+    if (min <= 0) return 'En cours ou terminé aujourd\'hui';
+    return min < 60 ? `Dans ${min} min` : `Dans ${Math.floor(min / 60)} h${min % 60 ? String(min % 60).padStart(2, '0') : ''}`;
+  }
+  if (n === 1) return 'Demain';
+  if (n < 7) return `Dans ${n} jours`;
+  if (n < 14) return 'Dans 1 semaine';
+  if (n < 31) return `Dans ${Math.floor(n / 7)} semaines`;
+  return `Dans ${Math.round(n / 30)} mois`;
+}
 async function vueFil(onglet = 'actualites') {
   chargement();
   const uid = etat.session.user.id;
   const type = onglet === 'evenements' ? 'evenement' : 'message';
   const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }] = await Promise.all([
-    sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type)
+    (type === 'evenement'
+      // Un événement disparaît à minuit, juste après sa date (il reste visible toute la journée de l'événement)
+      ? sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type).gte('evt_date', debutDuJour().toISOString())
+      : sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type))
       .or(`statut.eq.publie,auteur_id.eq.${uid}`)
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
     sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid),
@@ -1775,10 +1803,10 @@ async function vueFil(onglet = 'actualites') {
     liste = [...liste.filter((p) => p.statut !== 'publie'), ...liste.filter((p) => p.statut === 'publie').sort((a, b) => new Date(b.publie_le) - new Date(a.publie_le))];
     html = liste.map((p) => cartePublication(p, aimes)).join('') || '<div class="vide"><span class="grand">✦</span>Aucune publication pour le moment. Soyez le premier à partager !</div>';
   } else {
-    const aVenir = liste.filter((p) => new Date(p.evt_date).getTime() >= maintenant - 6 * 3600e3);
-    const passes = liste.filter((p) => new Date(p.evt_date).getTime() < maintenant - 6 * 3600e3).reverse();
-    html = (aVenir.map((p) => carteEvenement(p, aimes)).join('') || '<div class="vide"><span class="grand">📅</span>Aucun événement à venir pour le moment.</div>')
-      + (passes.length ? `<h2>Événements passés</h2>${passes.map((p) => carteEvenement(p, aimes, true)).join('')}` : '');
+    // Classés selon la date de l'événement : le plus proche en haut
+    liste = liste.filter((p) => new Date(p.evt_date) >= debutDuJour())
+      .sort((a, b) => new Date(a.evt_date) - new Date(b.evt_date));
+    html = liste.map((p) => carteEvenement(p, aimes)).join('') || '<div class="vide"><span class="grand">📅</span>Aucun événement à venir pour le moment.</div>';
   }
 
   vue.innerHTML = `
@@ -1988,6 +2016,8 @@ function carteEvenement(p, aimes, passe = false) {
       <div class="date-evt"><b>${d.getDate()}</b><span>${d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}</span></div>
       <div style="flex:1;min-width:0">
         <h3 style="margin:0">${esc(p.evt_titre)}</h3>
+        ${!passe ? `<span class="rebours">⏳ ${compteARebours(p.evt_date)}</span>` : ''}
+        <div class="doux petit" style="margin-top:4px">Publié ${momentPrecis(p.publie_le || p.cree_le)}</div>
         <div class="doux petit" style="margin-top:4px">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? `<br>📍 ${esc(p.evt_lieu)}` : ''}</div>
       </div>
     </div>
