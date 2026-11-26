@@ -159,7 +159,8 @@ async function chargerProfil() {
 // ---------- Routeur ----------
 const routes = {
   connexion: vueConnexion,
-  accueil: vueAccueil,
+  accueil: (p) => vueFil(p || 'actualites'),
+  musique: vueAccueil,
   titre: vueTitre,
   artiste: vueArtiste,
   deposer: vueDeposer,
@@ -184,7 +185,17 @@ async function router() {
   $('#btn-messages')?.classList.toggle('cache', !connecte);
   if (!connecte && nom !== 'connexion') { location.hash = '#/connexion'; return; }
   if (connecte && nom === 'connexion') { location.hash = '#/accueil'; return; }
-  $$('#nav a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom || (nom === 'deposer' && a.dataset.route === 'artiste') || (['admin', 'achats', 'abonnement'].includes(nom) && a.dataset.route === 'profil')));
+  const SECTION_MUSIQUE = ['musique', 'artiste', 'deposer', 'titre', 'a'];
+  $$('#nav a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom
+    || (nom === 'fil' && a.dataset.route === 'accueil')
+    || (SECTION_MUSIQUE.includes(nom) && a.dataset.route === 'musique')
+    || (['admin', 'achats', 'abonnement', 'pro', 'recruteur', 'cv'].includes(nom) && a.dataset.route === 'profil')));
+  // Sous-onglets de la section Musique : Musique | Artiste
+  const om = $('#onglets-musique');
+  if (om) {
+    om.classList.toggle('cache', !['musique', 'artiste', 'deposer'].includes(nom));
+    om.querySelectorAll('a').forEach((x) => x.classList.toggle('actif', x.dataset.o === (nom === 'musique' ? 'musique' : 'artiste')));
+  }
   $('#btn-messages')?.classList.toggle('actif', nom === 'messages');
   clearInterval(minuterieConversation);
   majBadgeMessages();
@@ -192,7 +203,7 @@ async function router() {
   majBadgeFil();
   window.scrollTo(0, 0);
   try {
-    await (routes[nom] || vueAccueil)(param);
+    await (routes[nom] || (() => vueFil('actualites')))(param);
   } catch (e) {
     erreur(e);
     vue.innerHTML = `<div class="vide"><span class="grand">⚠</span>Impossible de charger cette page.<br><button class="btn secondaire petit" onclick="location.reload()" style="margin-top:14px">Réessayer</button></div>`;
@@ -275,18 +286,12 @@ async function vueAccueil() {
       <h1>${prenom ? `Mbote ${esc(prenom)} !` : 'Mbote !'}</h1>
       <p>${estAbonne() ? 'Vous êtes abonné : écoute dans l\'ordre, clips à la suite et téléchargements gratuits.' : 'Écoute gratuite en lecture aléatoire. <a href="#/abonnement" style="color:#fff;text-decoration:underline">Abonnez-vous</a> pour écouter dans l\'ordre et télécharger gratuitement.'}</p>
     </div>
-    ${estAdmin() ? '<div id="alerte-admin"></div><div id="zone-notif-accueil"></div>' : ''}
     <div class="recherche"><input id="cherche" type="search" placeholder="Rechercher un titre, un artiste, un genre…"></div>
     <div class="onglets" style="margin:6px 0 14px">
       <button data-tri="nouveautes" class="${(vueAccueil.tri || 'nouveautes') === 'nouveautes' ? 'actif' : ''}">Nouveautés</button>
       <button data-tri="ecoutes" class="${vueAccueil.tri === 'ecoutes' ? 'actif' : ''}">Les plus écoutés</button>
     </div>
     <div id="liste" class="liste"></div>`;
-  if (estAdmin()) {
-    majAlertesAdmin();
-    if (notifPossibles() && Notification.permission === 'default') carteNotifications($('#zone-notif-accueil'));
-  }
-
   const parAuditeurs = (a, b) => (b.nb_auditeurs || 0) - (a.nb_auditeurs || 0) || (b.nb_ecoutes || 0) - (a.nb_ecoutes || 0);
   const dessinerListe = (liste0) => {
     const classement = vueAccueil.tri === 'ecoutes';
@@ -1810,6 +1815,7 @@ async function vueFil(onglet = 'actualites') {
   }
 
   vue.innerHTML = `
+    ${estAdmin() ? '<div id="alerte-admin"></div><div id="zone-notif-accueil"></div>' : ''}
     <div class="onglets" style="margin-top:0">
       <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités${type !== 'message' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
       <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements${type !== 'evenement' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
@@ -1844,7 +1850,11 @@ async function vueFil(onglet = 'actualites') {
     </form>`}
     <div id="fil">${html}</div>`;
 
-  $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/fil/${b.dataset.fil}`; });
+  $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/accueil/${b.dataset.fil}`; });
+  if (estAdmin()) {
+    majAlertesAdmin();
+    if (notifPossibles() && Notification.permission === 'default') carteNotifications($('#zone-notif-accueil'));
+  }
   // Étiquette « Nouveau » sur chaque nouvelle publication, puis l'onglet est marqué comme lu
   liste.filter(estNouveau).forEach((p) => {
     const carte = $(`[data-pub="${p.id}"]`);

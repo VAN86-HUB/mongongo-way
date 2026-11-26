@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Sora:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=30">
+  <link rel="stylesheet" href="style.css?v=31">
   <script>try{document.documentElement.dataset.theme=localStorage.getItem('mw-theme')==='jour'?'jour':'nuit'}catch(e){document.documentElement.dataset.theme='nuit'}</script>
 </head>
 <body>
@@ -34,6 +34,10 @@
     </div>
   </header>
 
+  <div id="onglets-musique" class="onglets onglets-section cache">
+    <a href="#/musique" data-o="musique">Musique</a>
+    <a href="#/artiste" data-o="artiste">Artiste</a>
+  </div>
   <main id="vue" class="vue" aria-live="polite"></main>
 
   <!-- Lecteur audio -->
@@ -50,16 +54,15 @@
 
   <nav id="nav" class="nav cache">
     <div class="nav-titre">Menu</div>
-    <a href="#/accueil" data-route="accueil"><span class="ico">⌂</span>Accueil</a>
-    <a href="#/fil" data-route="fil"><span class="ico">✦<span id="pastille-fil" class="pastille pastille-nav cache"></span></span>Fil</a>
+    <a href="#/accueil" data-route="accueil"><span class="ico">⌂<span id="pastille-fil" class="pastille pastille-nav cache"></span></span>Accueil</a>
+    <a href="#/musique" data-route="musique"><span class="ico">♪</span>Musique</a>
     <a href="#/soutien" data-route="soutien"><span class="ico">♥</span>Soutien</a>
-    <a href="#/artiste" data-route="artiste"><span class="ico">♪</span>Artiste</a>
     <a href="#/profil" data-route="profil"><span class="ico">◉<span id="pastille-admin" class="pastille pastille-nav cache"></span></span>Profil</a>
   </nav>
 
   <div id="toast" class="toast" role="status"></div>
   <div id="modale" class="modale cache"><div class="modale-boite" id="modale-boite"></div></div>
 
-  <script type="module" src="app.js?v=30"></script>
+  <script type="module" src="app.js?v=31"></script>
 </body>
 </html>

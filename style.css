@@ -553,3 +553,13 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
 .date-evt span, html[data-theme=jour] .date-evt span { color: #1b1405; font-weight: 700; letter-spacing: .06em; }
 /* Boutons « j'aime » et commentaires en pastilles */
 .pub-pied button, .pub-actions button { border-radius: 999px; }
+
+/* Section Musique : sous-onglets Musique | Artiste (comme Actualités | Événements) */
+.onglets-section { width: calc(100% - 32px); max-width: 728px; margin: 18px auto -6px; }
+.onglets-section.cache { display: none; }
+.onglets a { flex: 1 0 auto; display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px; border-radius: 999px; color: var(--doux); font-weight: 600; text-decoration: none; }
+.onglets a.actif { background: var(--or); color: #1b1405; font-weight: 700; }
+@media (min-width: 900px) {
+  body:has(#nav:not(.cache)) .onglets-section { margin-left: calc(var(--menu-l) + max(24px, (100vw - var(--menu-l) - 1040px) / 2) + 24px); margin-top: 28px; margin-bottom: -14px; }
+  .onglets-section { max-width: 560px; }
+}
