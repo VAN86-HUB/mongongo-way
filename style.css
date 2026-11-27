@@ -563,3 +563,44 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
   body:has(#nav:not(.cache)) .onglets-section { margin-left: calc(var(--menu-l) + max(24px, (100vw - var(--menu-l) - 1040px) / 2) + 24px); margin-top: 28px; margin-bottom: -14px; }
   .onglets-section { max-width: 560px; }
 }
+
+/* Commentaires : réponses et modification */
+.commentaire.reponse { margin-left: 22px; padding-left: 12px; border-left: 2px solid var(--ligne); }
+.com-tete { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.com-actions { display: flex; gap: 14px; margin-top: 2px; }
+.com-actions .lien-bouton { padding: 4px 0; min-height: 32px; }
+.form-reponse, .form-modif { margin-top: 6px; }
+.carte.pub.cible { box-shadow: 0 0 0 2px var(--or); transition: box-shadow .4s; }
+
+/* Notifications */
+.notif { width: 100%; text-align: left; border: 0; background: none; color: var(--texte); font: inherit; cursor: pointer; align-items: flex-start; }
+.notif.non-lu .lt-titre { font-weight: 700; }
+.notif.non-lu { background: rgba(232, 176, 75, .08); }
+.notif-ico { width: 34px; height: 34px; border-radius: 50%; background: var(--fond-2); display: grid; place-items: center; flex-shrink: 0; font-size: 16px; }
+.rond > span:not(.pastille) { pointer-events: none; }
+
+/* Directs */
+.point-direct { width: 9px; height: 9px; border-radius: 50%; background: #ff3b3b; display: inline-block; box-shadow: 0 0 0 0 rgba(255,59,59,.6); animation: battement 1.4s infinite; flex-shrink: 0; }
+@keyframes battement { 0% { box-shadow: 0 0 0 0 rgba(255,59,59,.6); } 70% { box-shadow: 0 0 0 9px rgba(255,59,59,0); } 100% { box-shadow: 0 0 0 0 rgba(255,59,59,0); } }
+.bandeau-direct { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 12px; border-radius: var(--rayon); background: linear-gradient(90deg, rgba(229,72,77,.22), rgba(229,72,77,.08)); border: 1px solid #e5484d; color: var(--texte); }
+.prochain-direct { display: flex; align-items: center; gap: 12px; color: var(--texte); margin-bottom: 10px; }
+.liens-directs { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 0 12px; flex-wrap: wrap; }
+.etiquette-direct { display: inline-flex; align-items: center; gap: 6px; background: #e5484d; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: .06em; padding: 4px 10px; border-radius: 999px; }
+.etiquette-direct .point-direct { background: #fff; }
+.direct-page { display: grid; gap: 14px; }
+.cadre-video { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: #000; }
+.cadre-video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.direct-infos { margin-top: 10px; }
+.chat-direct { height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.msg-direct { font-size: 14px; line-height: 1.4; }
+.msg-direct b { color: var(--or); margin-right: 4px; }
+.msg-direct .lien-bouton { color: var(--doux); padding: 0 4px; }
+.grille-directs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.carte-direct { display: block; border-radius: 14px; overflow: hidden; background: var(--carte); border: 1px solid var(--ligne); color: var(--texte); }
+.carte-direct .miniature { aspect-ratio: 16 / 9; background: #000 center / cover no-repeat; position: relative; }
+.carte-direct .miniature .etiquette-direct { position: absolute; top: 8px; left: 8px; }
+@media (min-width: 900px) {
+  .direct-page { grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); align-items: start; }
+  .chat-direct { height: 420px; }
+}
+.notif .lt-titre, .notif .lt-artiste { display: block; } .notif .lt-artiste { margin-top: 3px; }

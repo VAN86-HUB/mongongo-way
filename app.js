@@ -161,6 +161,9 @@ const routes = {
   connexion: vueConnexion,
   accueil: (p) => vueFil(p || 'actualites'),
   musique: vueAccueil,
+  direct: vueDirect,
+  directs: vueDirects,
+  notifications: vueNotifications,
   titre: vueTitre,
   artiste: vueArtiste,
   deposer: vueDeposer,
@@ -187,7 +190,7 @@ async function router() {
   if (connecte && nom === 'connexion') { location.hash = '#/accueil'; return; }
   const SECTION_MUSIQUE = ['musique', 'artiste', 'deposer', 'titre', 'a'];
   $$('#nav a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom
-    || (nom === 'fil' && a.dataset.route === 'accueil')
+    || (['fil', 'direct', 'directs'].includes(nom) && a.dataset.route === 'accueil')
     || (SECTION_MUSIQUE.includes(nom) && a.dataset.route === 'musique')
     || (['admin', 'achats', 'abonnement', 'pro', 'recruteur', 'cv'].includes(nom) && a.dataset.route === 'profil')));
   // Sous-onglets de la section Musique : Musique | Artiste
@@ -201,6 +204,9 @@ async function router() {
   majBadgeMessages();
   majAlertesAdmin();
   majBadgeFil();
+  majBadgeNotifs();
+  $('#btn-notifs')?.classList.toggle('actif', nom === 'notifications');
+  $('#btn-notifs')?.classList.toggle('cache', !connecte);
   window.scrollTo(0, 0);
   try {
     await (routes[nom] || (() => vueFil('actualites')))(param);
@@ -1240,6 +1246,7 @@ async function vueProfil() {
     <div class="menu">
       <a href="#/abonnement">${estAbonne() ? `Mon abonnement · jusqu'au ${dateCourte(etat.finAbo)}` : 'S\'abonner'}</a>
       <a href="#/pro"><span>Mon profil professionnel <span class="doux petit">· CV pour les recruteurs</span></span></a>
+      <a href="#/notifications">Notifications</a>
       <a href="#/messages">Mes messages</a>
       <a href="#/achats">Mes téléchargements</a>
       <a href="#/artiste">${etat.artiste ? 'Mon espace artiste' : 'Devenir artiste'}</a>
@@ -1816,6 +1823,7 @@ async function vueFil(onglet = 'actualites') {
 
   vue.innerHTML = `
     ${estAdmin() ? '<div id="alerte-admin"></div><div id="zone-notif-accueil"></div>' : ''}
+    <div id="zone-directs"></div>
     <div class="onglets" style="margin-top:0">
       <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités${type !== 'message' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
       <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements${type !== 'evenement' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
@@ -1855,6 +1863,8 @@ async function vueFil(onglet = 'actualites') {
     majAlertesAdmin();
     if (notifPossibles() && Notification.permission === 'default') carteNotifications($('#zone-notif-accueil'));
   }
+  bandeauDirects($('#zone-directs'));
+  setTimeout(ouvrirCibleFil, 150);  // après la mise en place des clics du fil
   // Étiquette « Nouveau » sur chaque nouvelle publication, puis l'onglet est marqué comme lu
   liste.filter(estNouveau).forEach((p) => {
     const carte = $(`[data-pub="${p.id}"]`);
@@ -1945,6 +1955,7 @@ async function vueFil(onglet = 'actualites') {
       const zone = $('.zone-com', carte);
       if (!zone.classList.toggle('cache')) await chargerCommentaires(p, zone);
     }
+    if (e.target.closest('[data-modif-pub]')) return modifierPublication(p, () => vueFil(type === 'message' ? 'actualites' : 'evenements'));
     if (e.target.closest('[data-suppr-pub]')) {
       ouvrirModale(`<h2 style="margin-top:0">Supprimer cette publication ?</h2><p class="doux">Elle sera retirée du fil pour tout le monde.</p>
         <button class="btn danger plein" id="ok-suppr">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
@@ -1958,45 +1969,16 @@ async function vueFil(onglet = 'actualites') {
   };
 }
 
-async function chargerCommentaires(p, zone) {
-  zone.innerHTML = '<div class="doux petit">Chargement…</div>';
-  const { data, error } = await sb.from('publication_commentaires').select('id, contenu, cree_le, profil_id, profils(nom_complet)')
-    .eq('publication_id', p.id).order('cree_le', { ascending: true }).limit(200);
-  if (error) return erreur(error);
-  const uid = etat.session.user.id;
-  const ligne = (c) => `<div class="commentaire"><a class="auteur" href="#/membre/${c.profil_id}">${esc(c.profils?.nom_complet || 'Membre')}</a><span class="date">${momentPrecis(c.cree_le)}</span>
-    ${c.profil_id === uid || estAdmin() ? `<button class="lien-bouton petit" style="float:right;color:var(--doux)" data-suppr-com="${c.id}">Supprimer</button>` : ''}<p>${texteRiche(c.contenu)}</p></div>`;
-  zone.innerHTML = `${(data || []).map(ligne).join('')}
-    <form class="form-commentaire"><input maxlength="1000" placeholder="Écrire un commentaire…" required><button class="btn petit" type="submit">Envoyer</button></form>`;
-  $('form', zone).onsubmit = async (e) => {
-    e.preventDefault();
-    const inp = $('input', zone), contenu = inp.value.trim();
-    if (!contenu) return;
-    const { data: c, error: e2 } = await sb.from('publication_commentaires').insert({ publication_id: p.id, profil_id: uid, contenu })
-      .select('id, contenu, cree_le, profil_id, profils(nom_complet)').single();
-    if (e2) return erreur(e2);
-    inp.value = '';
-    $('form', zone).insertAdjacentHTML('beforebegin', ligne(c));
-    p.nb_commentaires++;
-    const b = zone.closest('[data-pub]').querySelector('[data-com]'); if (b) b.textContent = `💬 ${p.nb_commentaires}`;
-  };
-  zone.onclick = async (e) => {
-    const b = e.target.closest('[data-suppr-com]');
-    if (!b) return;
-    const { error: e3 } = await sb.from('publication_commentaires').delete().eq('id', b.dataset.supprCom);
-    if (e3) return erreur(e3);
-    b.closest('.commentaire').remove();
-  };
-}
-
 function enteteAuteur(p) {
   return `<div class="pub-entete">
     <div class="avatar petit-avatar">${esc((p.profils?.nom_complet || '?').charAt(0).toUpperCase())}</div>
-    <div style="flex:1;min-width:0"><a class="nom-auteur" href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'Membre')}</a><div class="doux petit">${momentPrecis(p.publie_le || p.cree_le)}</div></div>
-    ${boutonSupprPub(p)}
+    <div style="flex:1;min-width:0"><a class="nom-auteur" href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'Membre')}</a><div class="doux petit">${momentPrecis(p.publie_le || p.cree_le)}${p.modifie_le ? ' · modifié' : ''}</div></div>
+    ${boutonModifPub(p)}${boutonSupprPub(p)}
   </div>
   ${badgeStatutPub(p)}`;
 }
+const boutonModifPub = (p) => (p.auteur_id === etat.session.user.id && modifiable(p.cree_le)
+  ? `<button class="lien-bouton petit" data-modif-pub title="Modifiable pendant 10 minutes après la publication">✎ ${minutesRestantes(p.cree_le)} min</button>` : '');
 const boutonSupprPub = (p) => (p.auteur_id === etat.session.user.id || estAdmin() ? `<button class="lien-bouton petit" style="color:var(--doux)" data-suppr-pub title="Supprimer">🗑</button>` : '');
 function badgeStatutPub(p) {
   if (p.statut === 'en_attente') return '<div class="badge en_attente" style="margin-top:8px">En attente de validation · visible par vous seul</div>';
@@ -2032,7 +2014,7 @@ function carteEvenement(p, aimes, passe = false) {
       </div>
     </div>
     ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
-    <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><span>Annoncé par <a href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'un membre')}</a></span>${boutonSupprPub(p)}</div>
+    <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><span>Annoncé par <a href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'un membre')}</a>${p.modifie_le ? ' · modifié' : ''}</span><span>${boutonModifPub(p)}${boutonSupprPub(p)}</span></div>
     ${badgeStatutPub(p)}
     ${piedReactions(p, aimes)}
   </article>`;
@@ -2399,12 +2381,12 @@ async function carteNotifications(zone) {
     <div style="display:flex;gap:12px;align-items:center">
       <span style="font-size:26px">${actives ? '🔔' : '🔕'}</span>
       <div style="flex:1;min-width:0"><b>Notifications sur cet appareil : ${actives ? 'activées' : 'désactivées'}</b>
-        <div class="doux petit">${actives ? 'Vous êtes prévenu dès qu\'un artiste, un titre, une publication ou un événement attend votre validation, même application fermée.'
+        <div class="doux petit">${actives ? (estAdmin() ? 'Vous êtes prévenu des demandes à valider, des réponses, des commentaires et des directs, même application fermée.' : 'Vous êtes prévenu des réponses à vos commentaires, des commentaires sur vos publications et des directs, même application fermée.')
           : permis === 'impossible' ? 'Ce navigateur ne gère pas les notifications. Sur iPhone : installez l\'application sur l\'écran d\'accueil, puis ouvrez-la depuis l\'icône.'
           : permis === 'denied' ? 'Les notifications sont bloquées. Autorisez-les dans les réglages du navigateur (🔒 à côté de l\'adresse).'
-          : 'Activez-les pour être prévenu de chaque nouvelle demande, même quand l\'application est fermée.'}</div></div>
+          : (estAdmin() ? 'Activez-les pour être prévenu de chaque nouvelle demande, même quand l\'application est fermée.' : 'Activez-les pour être prévenu des réponses, des commentaires et des directs, même application fermée.')}</div></div>
     </div>
-    <div class="boutons">${actives ? '<button class="btn secondaire petit" id="notif-test">Envoyer une notification de test</button>'
+    <div class="boutons">${actives ? (estAdmin() ? '<button class="btn secondaire petit" id="notif-test">Envoyer une notification de test</button>' : '')
       : permis !== 'impossible' ? '<button class="btn petit" id="notif-activer">🔔 Activer les notifications</button>' : ''}</div>
   </div>`;
   $('#notif-activer', zone)?.addEventListener('click', async (e) => {
@@ -2878,6 +2860,354 @@ async function rechercheCandidats(demande) {
   };
   ['#f-q', '#f-ville', '#f-langue', '#f-dispo'].forEach((s) => $(s).addEventListener('input', afficher));
   afficher();
+}
+
+// =========================================================
+// COMMENTAIRES : RÉPONSES ET MODIFICATION (10 MINUTES)
+// =========================================================
+const DELAI_MODIF = 10 * 60 * 1000;
+const modifiable = (d) => Date.now() - new Date(d).getTime() < DELAI_MODIF;
+const minutesRestantes = (d) => Math.max(1, Math.ceil((DELAI_MODIF - (Date.now() - new Date(d).getTime())) / 60000));
+
+async function chargerCommentaires(p, zone) {
+  zone.innerHTML = '<div class="doux petit">Chargement…</div>';
+  const { data, error } = await sb.from('publication_commentaires').select('id, contenu, cree_le, modifie_le, profil_id, parent_id, profils(nom_complet)')
+    .eq('publication_id', p.id).order('cree_le', { ascending: true }).limit(300);
+  if (error) return erreur(error);
+  const uid = etat.session.user.id;
+  const tous = data || [];
+  const parId = Object.fromEntries(tous.map((c) => [c.id, c]));
+  const racine = (c) => { let x = c, n = 0; while (x.parent_id && parId[x.parent_id] && n++ < 50) x = parId[x.parent_id]; return x.id; };
+  const racines = tous.filter((c) => !c.parent_id || !parId[c.parent_id]);
+  const ligne = (c, estReponse) => {
+    const visé = c.parent_id && parId[c.parent_id];
+    const aMoi = c.profil_id === uid;
+    return `<div class="commentaire ${estReponse ? 'reponse' : ''}" data-c="${c.id}">
+      <div class="com-tete"><a class="auteur" href="#/membre/${c.profil_id}">${esc(c.profils?.nom_complet || 'Membre')}</a>
+        <span class="date">${momentPrecis(c.cree_le)}${c.modifie_le ? ' · modifié' : ''}</span></div>
+      ${estReponse && visé && visé.parent_id ? `<div class="doux petit">↪ en réponse à ${esc(visé.profils?.nom_complet || 'Membre')}</div>` : ''}
+      <p class="com-texte">${texteRiche(c.contenu)}</p>
+      <div class="com-actions">
+        <button class="lien-bouton petit" data-repondre="${c.id}">Répondre</button>
+        ${aMoi && modifiable(c.cree_le) ? `<button class="lien-bouton petit" data-modif-com="${c.id}" title="Modifiable pendant 10 minutes">Modifier · ${minutesRestantes(c.cree_le)} min</button>` : ''}
+        ${aMoi || estAdmin() ? `<button class="lien-bouton petit" style="color:var(--doux)" data-suppr-com="${c.id}">Supprimer</button>` : ''}
+      </div>
+    </div>`;
+  };
+  const html = racines.map((r) => ligne(r, false) + tous.filter((c) => c.id !== r.id && c.parent_id && racine(c) === r.id).map((c) => ligne(c, true)).join('')).join('');
+  zone.innerHTML = `${html}
+    <form class="form-commentaire" data-principal><input maxlength="1000" placeholder="Écrire un commentaire…" required><button class="btn petit" type="submit">Envoyer</button></form>`;
+  const compteur = () => { const b = zone.closest('[data-pub]')?.querySelector('[data-com]'); if (b) b.textContent = `💬 ${p.nb_commentaires}`; };
+  const envoyer = async (contenu, parent) => {
+    const { error: e2 } = await sb.from('publication_commentaires').insert({ publication_id: p.id, profil_id: uid, contenu, parent_id: parent || null });
+    if (e2) return erreur(e2);
+    p.nb_commentaires++; compteur();
+    await chargerCommentaires(p, zone);
+    if (parent) toast('Réponse envoyée. L\'auteur du commentaire est prévenu.');
+  };
+  $('form[data-principal]', zone).onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = $('input', e.target), contenu = inp.value.trim();
+    if (contenu) await envoyer(contenu, null);
+  };
+  zone.onclick = async (e) => {
+    const rep = e.target.closest('[data-repondre]'), mod = e.target.closest('[data-modif-com]'), sup = e.target.closest('[data-suppr-com]');
+    if (rep) {
+      const c = parId[rep.dataset.repondre], bloc = rep.closest('.commentaire');
+      $$('.form-reponse', zone).forEach((f) => f.remove());
+      bloc.insertAdjacentHTML('beforeend', `<form class="form-commentaire form-reponse"><input maxlength="1000" placeholder="Répondre à ${esc(c.profils?.nom_complet || 'ce membre')}…" required><button class="btn petit" type="submit">Répondre</button></form>`);
+      const f = $('.form-reponse', bloc); $('input', f).focus();
+      f.onsubmit = async (ev) => { ev.preventDefault(); const t = $('input', f).value.trim(); if (t) await envoyer(t, c.id); };
+    }
+    if (mod) {
+      const c = parId[mod.dataset.modifCom], bloc = mod.closest('.commentaire'), texte = $('.com-texte', bloc);
+      texte.outerHTML = `<form class="form-commentaire form-modif"><input maxlength="1000" value="${esc(c.contenu)}" required><button class="btn petit" type="submit">Enregistrer</button><button class="btn secondaire petit" type="button" data-annuler>Annuler</button></form>`;
+      const f = $('.form-modif', bloc); const i = $('input', f); i.focus(); i.setSelectionRange(i.value.length, i.value.length);
+      $('[data-annuler]', f).onclick = () => chargerCommentaires(p, zone);
+      f.onsubmit = async (ev) => {
+        ev.preventDefault();
+        const t = i.value.trim(); if (!t) return;
+        const { error: e3 } = await sb.from('publication_commentaires').update({ contenu: t }).eq('id', c.id);
+        if (e3) return erreur(e3);
+        toast('Commentaire modifié.'); chargerCommentaires(p, zone);
+      };
+    }
+    if (sup) {
+      const { error: e3 } = await sb.from('publication_commentaires').delete().eq('id', sup.dataset.supprCom);
+      if (e3) return erreur(e3);
+      chargerCommentaires(p, zone);
+    }
+  };
+}
+
+// Modifier ma publication pendant 10 minutes
+function modifierPublication(p, apres) {
+  const evt = p.type === 'evenement';
+  const local = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
+  ouvrirModale(`<h2 style="margin-top:0">Modifier ${evt ? 'l\'événement' : 'la publication'}</h2>
+    <p class="doux petit">Encore ${minutesRestantes(p.cree_le)} min pour modifier.${!estAdmin() && p.statut === 'publie' ? ' Après modification, elle repassera en validation par l\'administrateur.' : ''}</p>
+    <form id="f-modif-pub">
+      ${evt ? `<label for="m-titre">Titre</label><input id="m-titre" required maxlength="120" value="${esc(p.evt_titre || '')}">
+        <label for="m-date">Date et heure</label><input id="m-date" type="datetime-local" required value="${local(p.evt_date)}">
+        <label for="m-lieu">Lieu</label><input id="m-lieu" maxlength="120" value="${esc(p.evt_lieu || '')}">` : ''}
+      <label for="m-texte">${evt ? 'Description' : 'Texte'}</label><textarea id="m-texte" rows="5" maxlength="3000">${esc(p.texte || '')}</textarea>
+      <button class="btn plein" type="submit" style="margin-top:12px">Enregistrer</button>
+    </form>`);
+  $('#f-modif-pub').onsubmit = async (e) => {
+    e.preventDefault();
+    const d = { texte: $('#m-texte').value.trim() || null };
+    if (evt) {
+      const date = new Date($('#m-date').value);
+      if (isNaN(date)) return toast('Choisissez la date et l\'heure.', true);
+      Object.assign(d, { evt_titre: $('#m-titre').value.trim(), evt_date: date.toISOString(), evt_lieu: $('#m-lieu').value.trim() || null });
+    } else if (!d.texte && !photosDe(p).length) return toast('Le texte ne peut pas être vide.', true);
+    const { error } = await sb.from('publications').update(d).eq('id', p.id);
+    if (error) return erreur(error);
+    fermerModale();
+    toast(!estAdmin() && p.statut === 'publie' ? 'Modifiée. Elle sera de nouveau visible après validation.' : 'Publication modifiée.');
+    apres?.();
+  };
+}
+
+// =========================================================
+// NOTIFICATIONS DES MEMBRES (cloche)
+// =========================================================
+async function majBadgeNotifs() {
+  const pastille = $('#badge-notifs');
+  if (!pastille) return;
+  if (!etat.session) { pastille.classList.add('cache'); return; }
+  const { data } = await sb.rpc('nb_notifications_non_lues');
+  const n = Number(data || 0);
+  pastille.textContent = n > 99 ? '99+' : String(n);
+  pastille.classList.toggle('cache', !n);
+}
+setInterval(() => { if (document.visibilityState === 'visible') majBadgeNotifs(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') majBadgeNotifs(); });
+
+async function vueNotifications() {
+  chargement();
+  const { data, error } = await sb.from('notifications').select('*, publications(type)').order('cree_le', { ascending: false }).limit(100);
+  if (error) throw error;
+  const liste = data || [];
+  const icone = { reponse_commentaire: '↪', commentaire_publication: '💬', direct: '📺' };
+  vue.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <h1 style="margin:0">Notifications</h1>
+      ${liste.length ? '<button class="btn secondaire petit" id="vider-notifs">Tout effacer</button>' : ''}
+    </div>
+    <p class="doux petit">Réponses à vos commentaires, commentaires sur vos publications et directs.</p>
+    <div class="liste liste-simple" id="liste-notifs">${liste.map((n) => `
+      <button class="ligne-titre notif ${n.lu_le ? '' : 'non-lu'}" data-notif="${n.id}">
+        <span class="notif-ico">${icone[n.genre] || '🔔'}</span>
+        <span class="lt-infos"><span class="lt-titre" style="white-space:normal">${esc(n.texte)}</span><span class="lt-artiste">${momentPrecis(n.cree_le)}</span></span>
+      </button>`).join('') || '<div class="vide"><span class="grand">🔔</span>Aucune notification pour le moment.</div>'}</div>
+    <div id="zone-notif-membre" style="margin-top:16px"></div>`;
+  carteNotifications($('#zone-notif-membre'));
+  $('#liste-notifs').onclick = (e) => {
+    const b = e.target.closest('[data-notif]'); if (!b) return;
+    const n = liste.find((x) => x.id === b.dataset.notif);
+    if (n.genre === 'direct' && n.direct_id) { location.hash = `#/direct/${n.direct_id}`; return; }
+    if (n.publication_id) {
+      try { sessionStorage.setItem('mw-cible', n.publication_id); } catch (_) {}
+      location.hash = n.publications?.type === 'evenement' ? '#/accueil/evenements' : '#/accueil/actualites';
+    }
+  };
+  $('#vider-notifs')?.addEventListener('click', async () => {
+    const { error: e2 } = await sb.from('notifications').delete().eq('destinataire_id', etat.session.user.id);
+    if (e2) return erreur(e2);
+    vueNotifications();
+  });
+  if (liste.some((n) => !n.lu_le)) { await sb.rpc('marquer_notifications_lues'); majBadgeNotifs(); }
+}
+
+// Ouvre la publication visée par une notification (défilement + commentaires ouverts)
+function ouvrirCibleFil() {
+  let cible = null;
+  try { cible = sessionStorage.getItem('mw-cible'); sessionStorage.removeItem('mw-cible'); } catch (_) {}
+  if (!cible) return;
+  const carte = $(`[data-pub="${cible}"]`);
+  if (!carte) return toast('Cette publication n\'est plus disponible.', true);
+  carte.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  carte.classList.add('cible');
+  setTimeout(() => carte.classList.remove('cible'), 2500);
+  const b = $('[data-com]', carte), zone = $('.zone-com', carte);
+  if (b && zone?.classList.contains('cache')) b.click();
+}
+
+// =========================================================
+// DIRECTS (vidéo YouTube, entourée par MongongoWay)
+// =========================================================
+function extraireYoutube(url) {
+  const s = String(url || '').trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+  const m = s.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|live\/|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+const miniatureYoutube = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+// Bandeau en haut de l'Accueil : direct en cours, prochain direct, bouton de l'administrateur
+async function bandeauDirects(zone) {
+  if (!zone) return;
+  const { data } = await sb.from('directs').select('id, titre, statut, debut_prevu, demarre_le, youtube_id').in('statut', ['en_direct', 'programme'])
+    .order('statut', { ascending: true }).limit(5);
+  const enCours = (data || []).find((d) => d.statut === 'en_direct');
+  const prochain = (data || []).filter((d) => d.statut === 'programme').sort((a, b) => new Date(a.debut_prevu || 0) - new Date(b.debut_prevu || 0))[0];
+  zone.innerHTML = `
+    ${enCours ? `<a class="bandeau-direct" href="#/direct/${enCours.id}">
+        <span class="point-direct"></span><span style="flex:1;min-width:0"><b>EN DIRECT</b> · ${esc(enCours.titre)}</span><span class="btn petit">Regarder</span></a>` : ''}
+    ${!enCours && prochain ? `<a class="carte prochain-direct" href="#/direct/${prochain.id}">📺 <span style="flex:1;min-width:0"><b>Prochain direct :</b> ${esc(prochain.titre)}${prochain.debut_prevu ? `<br><span class="doux petit">${dateEvenement(prochain.debut_prevu)}</span>` : ''}</span></a>` : ''}
+    <div class="liens-directs">
+      <a href="#/directs" class="lien-bouton petit">📺 Directs et rediffusions</a>
+      ${estAdmin() ? '<button class="btn secondaire petit" id="lancer-direct">🔴 Lancer un direct</button>' : ''}
+    </div>`;
+  $('#lancer-direct', zone)?.addEventListener('click', () => formulaireDirect());
+}
+
+function formulaireDirect(d = null) {
+  const local = (x) => { if (!x) return ''; const y = new Date(x); y.setMinutes(y.getMinutes() - y.getTimezoneOffset()); return y.toISOString().slice(0, 16); };
+  ouvrirModale(`<h2 style="margin-top:0">${d ? 'Modifier le direct' : 'Lancer un direct'}</h2>
+    <p class="doux petit">Démarrez le direct sur YouTube (téléphone ou ordinateur), puis collez ici son lien. Tous les membres seront prévenus au démarrage.</p>
+    <form id="f-direct">
+      <label for="d-titre">Titre</label><input id="d-titre" required maxlength="120" value="${esc(d?.titre || '')}" placeholder="Ex. : Culte du dimanche">
+      <label for="d-lien">Lien YouTube du direct</label><input id="d-lien" required value="${d ? 'https://youtu.be/' + d.youtube_id : ''}" placeholder="https://youtube.com/live/…">
+      <label for="d-desc">Description (facultatif)</label><textarea id="d-desc" rows="3" maxlength="1000">${esc(d?.description || '')}</textarea>
+      <label for="d-prevu">Programmer pour plus tard (facultatif)</label><input id="d-prevu" type="datetime-local" value="${local(d?.debut_prevu)}">
+      <div class="boutons" style="margin-top:14px">
+        <button class="btn" type="submit" data-mode="maintenant">🔴 Démarrer maintenant</button>
+        <button class="btn secondaire" type="submit" data-mode="programmer">Programmer</button>
+      </div>
+    </form>`);
+  $('#f-direct').onsubmit = async (e) => {
+    e.preventDefault();
+    const yt = extraireYoutube($('#d-lien').value);
+    if (!yt) return toast('Lien YouTube non reconnu. Copiez le lien du direct depuis YouTube (Partager).', true);
+    const mode = e.submitter?.dataset.mode;
+    const prevu = $('#d-prevu').value ? new Date($('#d-prevu').value) : null;
+    if (mode === 'programmer' && !prevu) return toast('Indiquez la date et l\'heure du direct.', true);
+    const donnees = { titre: $('#d-titre').value.trim(), youtube_id: yt, description: $('#d-desc').value.trim() || null,
+      debut_prevu: prevu ? prevu.toISOString() : null, statut: mode === 'maintenant' ? 'en_direct' : (d?.statut === 'en_direct' ? 'en_direct' : 'programme') };
+    const r = d ? await sb.from('directs').update(donnees).eq('id', d.id).select('id').single() : await sb.from('directs').insert(donnees).select('id').single();
+    if (r.error) return erreur(r.error);
+    fermerModale();
+    toast(donnees.statut === 'en_direct' ? 'Direct lancé : les membres sont prévenus.' : 'Direct programmé.');
+    location.hash = `#/direct/${r.data.id}`;
+  };
+}
+
+let minuterieDirect = null;
+async function vueDirect(id) {
+  chargement();
+  const uid = etat.session.user.id;
+  const { data: d, error } = await sb.from('directs').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  if (!d) { vue.innerHTML = '<div class="vide"><span class="grand">📺</span>Ce direct n\'existe plus.</div>'; return; }
+  const enDirect = d.statut === 'en_direct';
+  const etiquette = enDirect ? '<span class="etiquette-direct"><span class="point-direct"></span>EN DIRECT</span>'
+    : d.statut === 'programme' ? `<span class="badge">Programmé${d.debut_prevu ? ' · ' + dateEvenement(d.debut_prevu) : ''}</span>` : '<span class="badge">Rediffusion</span>';
+  vue.innerHTML = `
+    <div class="direct-page">
+      <div class="direct-video">
+        <div class="cadre-video"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(d.youtube_id)}?autoplay=${enDirect ? 1 : 0}&playsinline=1&rel=0&modestbranding=1"
+          title="${esc(d.titre)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+        <div class="direct-infos">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${etiquette}<span class="doux petit" id="nb-spect">${enDirect ? '' : d.pic_spectateurs ? `👁 ${d.pic_spectateurs} spectateur${d.pic_spectateurs > 1 ? 's' : ''} au plus fort` : ''}</span></div>
+          <h1 style="margin:8px 0 4px">${esc(d.titre)}</h1>
+          ${d.description ? `<p class="doux" style="margin:0">${texteRiche(d.description)}</p>` : ''}
+          <p class="doux petit">${d.demarre_le ? 'Commencé ' + momentPrecis(d.demarre_le) : ''}${d.termine_le ? ' · terminé ' + momentPrecis(d.termine_le) : ''}</p>
+          <div class="boutons">
+            <a class="btn secondaire petit" href="#/soutien">♥ Soutenir</a>
+            <a class="btn secondaire petit" href="https://www.youtube.com/watch?v=${encodeURIComponent(d.youtube_id)}" target="_blank" rel="noopener noreferrer">Ouvrir dans YouTube ↗</a>
+            ${estAdmin() ? `${d.statut === 'programme' ? '<button class="btn petit" id="d-demarrer">🔴 Démarrer</button>' : ''}
+              ${enDirect ? '<button class="btn danger petit" id="d-terminer">Terminer le direct</button>' : ''}
+              <button class="btn secondaire petit" id="d-modifier">Modifier</button>
+              <button class="btn secondaire petit" id="d-supprimer" style="color:var(--rouge)">Supprimer</button>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="direct-chat carte">
+        <h3 style="margin:0 0 8px">${enDirect ? 'Discussion en direct' : 'Discussion'}</h3>
+        <div id="chat-direct" class="chat-direct"><div class="doux petit">Chargement…</div></div>
+        ${enDirect ? `<form id="f-chat" class="form-commentaire"><input maxlength="300" placeholder="Écrire un message…" required><button class="btn petit" type="submit">Envoyer</button></form>`
+          : `<p class="doux petit" style="margin:8px 0 0">${d.statut === 'programme' ? 'La discussion s\'ouvrira au début du direct.' : 'La discussion est fermée : voici les messages échangés pendant le direct.'}</p>`}
+      </div>
+    </div>`;
+
+  let dernier = 0;
+  const chargerChat = async () => {
+    const zone = $('#chat-direct'); if (!zone) return;
+    const { data: msgs } = await sb.from('direct_messages').select('id, contenu, cree_le, profil_id, profils(nom_complet)').eq('direct_id', id).order('cree_le', { ascending: true }).limit(300);
+    const liste = msgs || [];
+    if (liste.length === dernier && zone.dataset.charge) return;
+    const enBas = zone.scrollHeight - zone.scrollTop - zone.clientHeight < 60;
+    zone.dataset.charge = '1'; dernier = liste.length;
+    zone.innerHTML = liste.map((m) => `<div class="msg-direct"><b>${esc(m.profils?.nom_complet || 'Membre')}</b> ${texteRiche(m.contenu)}
+      ${m.profil_id === uid || estAdmin() ? `<button class="lien-bouton" data-suppr-msg="${m.id}" title="Supprimer">×</button>` : ''}</div>`).join('')
+      || `<div class="doux petit">${enDirect ? 'Soyez le premier à écrire !' : 'Aucun message.'}</div>`;
+    if (enBas) zone.scrollTop = zone.scrollHeight;
+  };
+  await chargerChat();
+  $('#chat-direct').scrollTop = 1e6;
+  $('#chat-direct').onclick = async (e) => {
+    const b = e.target.closest('[data-suppr-msg]'); if (!b) return;
+    await sb.from('direct_messages').delete().eq('id', b.dataset.supprMsg); dernier = -1; chargerChat();
+  };
+  $('#f-chat')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const inp = $('input', e.target), contenu = inp.value.trim(); if (!contenu) return;
+    const { error: e2 } = await sb.from('direct_messages').insert({ direct_id: id, profil_id: uid, contenu });
+    if (e2) return erreur(e2);
+    inp.value = ''; await chargerChat(); $('#chat-direct').scrollTop = 1e6;
+  });
+  const signaler = async () => {
+    if (!enDirect || !$('#nb-spect')) return;
+    const { data: n } = await sb.rpc('signaler_spectateur', { p_direct: id });
+    if ($('#nb-spect')) $('#nb-spect').textContent = `👁 ${n || 1} spectateur${n > 1 ? 's' : ''}`;
+  };
+  await signaler();
+  clearInterval(minuterieDirect);
+  minuterieDirect = setInterval(() => {
+    if (!location.hash.startsWith('#/direct/')) { clearInterval(minuterieDirect); return; }
+    if (document.visibilityState !== 'visible') return;
+    if (enDirect) chargerChat();
+    if (Date.now() % 30000 < 5000) signaler();
+  }, 5000);
+
+  const changerStatut = async (statut, msg) => {
+    const { error: e2 } = await sb.from('directs').update({ statut }).eq('id', id);
+    if (e2) return erreur(e2);
+    toast(msg); vueDirect(id);
+  };
+  $('#d-demarrer')?.addEventListener('click', () => changerStatut('en_direct', 'Direct lancé : les membres sont prévenus.'));
+  $('#d-terminer')?.addEventListener('click', () => changerStatut('termine', 'Direct terminé : il reste disponible en rediffusion.'));
+  $('#d-modifier')?.addEventListener('click', () => formulaireDirect(d));
+  $('#d-supprimer')?.addEventListener('click', () => {
+    ouvrirModale(`<h2 style="margin-top:0">Supprimer ce direct ?</h2><p class="doux">La rediffusion et sa discussion disparaîtront de MongongoWay (la vidéo reste sur YouTube).</p>
+      <button class="btn danger plein" id="ok-suppr-d">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+    $('#ok-suppr-d').onclick = async () => {
+      const { error: e3 } = await sb.from('directs').delete().eq('id', id);
+      if (e3) return erreur(e3);
+      fermerModale(); toast('Direct supprimé.'); location.hash = '#/directs';
+    };
+  });
+}
+
+async function vueDirects() {
+  chargement();
+  const { data, error } = await sb.from('directs').select('*').order('cree_le', { ascending: false }).limit(100);
+  if (error) throw error;
+  const liste = data || [];
+  const carte = (d) => `<a class="carte-direct" href="#/direct/${d.id}">
+      <div class="miniature" style="background-image:url('${miniatureYoutube(d.youtube_id)}')">${d.statut === 'en_direct' ? '<span class="etiquette-direct"><span class="point-direct"></span>EN DIRECT</span>' : ''}</div>
+      <div style="padding:10px 12px"><b>${esc(d.titre)}</b><div class="doux petit">${d.statut === 'programme' ? 'Programmé' + (d.debut_prevu ? ' · ' + dateEvenement(d.debut_prevu) : '') : d.statut === 'en_direct' ? 'En cours' : 'Rediffusion · ' + dateCourte(d.demarre_le || d.cree_le)}</div></div>
+    </a>`;
+  const groupes = [['En direct', liste.filter((d) => d.statut === 'en_direct')], ['À venir', liste.filter((d) => d.statut === 'programme')], ['Rediffusions', liste.filter((d) => d.statut === 'termine')]];
+  vue.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h1 style="margin:0">Directs</h1>${estAdmin() ? '<button class="btn petit" id="lancer-direct-2">🔴 Lancer un direct</button>' : ''}
+    </div>
+    ${groupes.filter(([, l]) => l.length).map(([t, l]) => `<h2>${t}</h2><div class="grille-directs">${l.map(carte).join('')}</div>`).join('')
+      || '<div class="vide"><span class="grand">📺</span>Aucun direct pour le moment.</div>'}`;
+  $('#lancer-direct-2')?.addEventListener('click', () => formulaireDirect());
 }
 
 // =========================================================
