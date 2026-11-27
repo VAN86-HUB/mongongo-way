@@ -162,7 +162,7 @@ const routes = {
   accueil: (p) => vueFil(p || 'actualites'),
   musique: vueAccueil,
   direct: vueDirect,
-  directs: vueDirects,
+  directs: () => { location.replace('#/accueil/directs'); },
   notifications: vueNotifications,
   titre: vueTitre,
   artiste: vueArtiste,
@@ -1788,10 +1788,11 @@ function compteARebours(d) {
   return `Dans ${Math.round(n / 30)} mois`;
 }
 async function vueFil(onglet = 'actualites') {
+  if (onglet === 'directs') return vueDirects();
   chargement();
   const uid = etat.session.user.id;
   const type = onglet === 'evenements' ? 'evenement' : 'message';
-  const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }] = await Promise.all([
+  const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }, { data: enCoursDirect }] = await Promise.all([
     (type === 'evenement'
       // Un événement disparaît à minuit, juste après sa date (il reste visible toute la journée de l'événement)
       ? sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type).gte('evt_date', debutDuJour().toISOString())
@@ -1799,8 +1800,10 @@ async function vueFil(onglet = 'actualites') {
       .or(`statut.eq.publie,auteur_id.eq.${uid}`)
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
     sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid),
-    sb.rpc('nouveautes_fil')
+    sb.rpc('nouveautes_fil'),
+    sb.from('directs').select('id').eq('statut', 'en_direct').limit(1)
   ]);
+  const directEnCours = !!enCoursDirect?.length;
   if (error) throw error;
   const aimes = new Set((mesJaimes || []).map((x) => x.publication_id));
   // Nouveautés depuis la dernière visite de cet onglet
@@ -1824,10 +1827,7 @@ async function vueFil(onglet = 'actualites') {
   vue.innerHTML = `
     ${estAdmin() ? '<div id="alerte-admin"></div><div id="zone-notif-accueil"></div>' : ''}
     <div id="zone-directs"></div>
-    <div class="onglets" style="margin-top:0">
-      <button data-fil="actualites" class="${type === 'message' ? 'actif' : ''}">Actualités${type !== 'message' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
-      <button data-fil="evenements" class="${type === 'evenement' ? 'actif' : ''}">Événements${type !== 'evenement' && nbAutreOnglet ? ` <span class="pastille">${nbAutreOnglet}</span>` : ''}</button>
-    </div>
+    ${ongletsFil(type === 'message' ? 'actualites' : 'evenements', nbAutreOnglet, directEnCours)}
     ${liste.filter(estNouveau).length ? `<div class="bandeau-nouveautes">✦ <b>${liste.filter(estNouveau).length}</b> ${type === 'message' ? (liste.filter(estNouveau).length > 1 ? 'nouvelles actualités' : 'nouvelle actualité') : (liste.filter(estNouveau).length > 1 ? 'nouveaux événements' : 'nouvel événement')} depuis votre dernière visite</div>` : ''}
     ${type === 'message' ? `
     <form class="carte composeur" id="form-pub">
@@ -3055,12 +3055,8 @@ async function bandeauDirects(zone) {
   zone.innerHTML = `
     ${enCours ? `<a class="bandeau-direct" href="#/direct/${enCours.id}">
         <span class="point-direct"></span><span style="flex:1;min-width:0"><b>EN DIRECT</b> · ${esc(enCours.titre)}</span><span class="btn petit">Regarder</span></a>` : ''}
-    ${!enCours && prochain ? `<a class="carte prochain-direct" href="#/direct/${prochain.id}">📺 <span style="flex:1;min-width:0"><b>Prochain direct :</b> ${esc(prochain.titre)}${prochain.debut_prevu ? `<br><span class="doux petit">${dateEvenement(prochain.debut_prevu)}</span>` : ''}</span></a>` : ''}
-    <div class="liens-directs">
-      <a href="#/directs" class="lien-bouton petit">📺 Directs et rediffusions</a>
-      ${estAdmin() ? '<button class="btn secondaire petit" id="lancer-direct">🔴 Lancer un direct</button>' : ''}
-    </div>`;
-  $('#lancer-direct', zone)?.addEventListener('click', () => formulaireDirect());
+    ${!enCours && prochain ? `<a class="carte prochain-direct" href="#/accueil/directs">📺 <span style="flex:1;min-width:0"><b>Prochain direct :</b> ${esc(prochain.titre)}${prochain.debut_prevu ? `<br><span class="doux petit">${dateEvenement(prochain.debut_prevu)}</span>` : ''}</span></a>` : ''}
+`;
 }
 
 function formulaireDirect(d = null) {
@@ -3186,15 +3182,19 @@ async function vueDirect(id) {
     $('#ok-suppr-d').onclick = async () => {
       const { error: e3 } = await sb.from('directs').delete().eq('id', id);
       if (e3) return erreur(e3);
-      fermerModale(); toast('Direct supprimé.'); location.hash = '#/directs';
+      fermerModale(); toast('Direct supprimé.'); location.hash = '#/accueil/directs';
     };
   });
 }
 
 async function vueDirects() {
   chargement();
-  const { data, error } = await sb.from('directs').select('*').order('cree_le', { ascending: false }).limit(100);
+  const [{ data, error }, { data: nouveautes }] = await Promise.all([
+    sb.from('directs').select('*').order('cree_le', { ascending: false }).limit(100),
+    sb.rpc('nouveautes_fil')
+  ]);
   if (error) throw error;
+  const nbFil = Number(nouveautes?.actualites || 0) + Number(nouveautes?.evenements || 0);
   const liste = data || [];
   const carte = (d) => `<a class="carte-direct" href="#/direct/${d.id}">
       <div class="miniature" style="background-image:url('${miniatureYoutube(d.youtube_id)}')">${d.statut === 'en_direct' ? '<span class="etiquette-direct"><span class="point-direct"></span>EN DIRECT</span>' : ''}</div>
@@ -3202,12 +3202,29 @@ async function vueDirects() {
     </a>`;
   const groupes = [['En direct', liste.filter((d) => d.statut === 'en_direct')], ['À venir', liste.filter((d) => d.statut === 'programme')], ['Rediffusions', liste.filter((d) => d.statut === 'termine')]];
   vue.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <h1 style="margin:0">Directs</h1>${estAdmin() ? '<button class="btn petit" id="lancer-direct-2">🔴 Lancer un direct</button>' : ''}
+    ${ongletsFil('directs', nbFil, liste.some((d) => d.statut === 'en_direct'), nouveautes)}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px">
+      <h2 style="margin:0">Directs et rediffusions</h2>${estAdmin() ? '<button class="btn petit" id="lancer-direct-2">🔴 Lancer un direct</button>' : ''}
     </div>
     ${groupes.filter(([, l]) => l.length).map(([t, l]) => `<h2>${t}</h2><div class="grille-directs">${l.map(carte).join('')}</div>`).join('')
       || '<div class="vide"><span class="grand">📺</span>Aucun direct pour le moment.</div>'}`;
   $('#lancer-direct-2')?.addEventListener('click', () => formulaireDirect());
+  $$('[data-fil]').forEach((b) => b.onclick = () => { location.hash = `#/accueil/${b.dataset.fil}`; });
+}
+
+// Barre d'onglets de l'Accueil : Actualités · Événements · Directs
+function ongletsFil(actif, nbAutre, enDirect, nouveautes = null) {
+  const nb = (o) => {
+    if (o === actif) return 0;
+    if (nouveautes) return Number((o === 'actualites' ? nouveautes.actualites : nouveautes.evenements) || 0);
+    return actif === 'directs' ? 0 : nbAutre;
+  };
+  const p = (o) => (nb(o) ? ` <span class="pastille">${nb(o)}</span>` : '');
+  return `<div class="onglets onglets-fil" style="margin-top:0">
+      <button data-fil="actualites" class="${actif === 'actualites' ? 'actif' : ''}">Actualités${p('actualites')}</button>
+      <button data-fil="evenements" class="${actif === 'evenements' ? 'actif' : ''}">Événements${p('evenements')}</button>
+      <button data-fil="directs" class="${actif === 'directs' ? 'actif' : ''}">${enDirect ? '<span class="point-direct"></span> ' : ''}Directs</button>
+    </div>`;
 }
 
 // =========================================================

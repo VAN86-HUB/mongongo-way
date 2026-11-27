@@ -604,3 +604,7 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
   .chat-direct { height: 420px; }
 }
 .notif .lt-titre, .notif .lt-artiste { display: block; } .notif .lt-artiste { margin-top: 3px; }
+/* Accueil : 3 onglets (Actualités · Événements · Directs) */
+.onglets-fil button { padding-left: 6px; padding-right: 6px; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.onglets-fil .point-direct { width: 8px; height: 8px; }
+@media (max-width: 380px) { .onglets-fil button { font-size: 14px; } }
