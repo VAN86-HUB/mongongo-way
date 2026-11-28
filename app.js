@@ -355,6 +355,200 @@ function brancherLignes(racine) {
 }
 
 // =========================================================
+// DÉPÔT EN AUDIO : CRÉATION D'UNE VIDÉO (pochette + titre + artiste)
+// =========================================================
+const URL_MEDIABUNNY = 'https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/+esm';
+const TAILLE_VIDEO_AUDIO = 960;   // vidéo carrée 960×960, nette sur téléphone comme sur ordinateur
+
+function chargerImage(src) {
+  return new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Image illisible')); i.src = src; });
+}
+function texteAjuste(g, texte, largeurMax, taille, poids, police = 'Sora, sans-serif') {
+  let t = taille;
+  do { g.font = `${poids} ${t}px ${police}`; t -= 2; } while (g.measureText(texte).width > largeurMax && t > 18);
+  if (g.measureText(texte).width <= largeurMax) return texte;
+  let s = texte;
+  while (s.length > 1 && g.measureText(s + '…').width > largeurMax) s = s.slice(0, -1);
+  return s + '…';
+}
+// Dessine l'image de la vidéo : fond flouté, pochette au centre, titre et nom de l'artiste
+async function dessinerImageVideo(canvas, { titre, artiste, pochette }) {
+  const T = canvas.width, g = canvas.getContext('2d');
+  try { await document.fonts?.load('700 40px Sora'); await document.fonts?.load('300 40px Sora'); } catch (_) {}
+  let img = null;
+  if (pochette) { const u = URL.createObjectURL(pochette); try { img = await chargerImage(u); } catch (_) {} finally { URL.revokeObjectURL(u); } }
+  // Fond
+  g.fillStyle = '#120e1f'; g.fillRect(0, 0, T, T);
+  if (img) {
+    g.save(); g.filter = 'blur(38px) brightness(.45)';
+    const k = Math.max(T / img.width, T / img.height) * 1.15;
+    g.drawImage(img, (T - img.width * k) / 2, (T - img.height * k) / 2, img.width * k, img.height * k);
+    g.restore();
+  } else {
+    const d = g.createRadialGradient(T / 2, T * .38, 20, T / 2, T * .45, T * .75);
+    d.addColorStop(0, '#3a2c63'); d.addColorStop(1, '#120e1f');
+    g.fillStyle = d; g.fillRect(0, 0, T, T);
+  }
+  g.fillStyle = 'rgba(18,14,31,.25)'; g.fillRect(0, 0, T, T);
+  // Pochette (ou le logo « L'onde » s'il n'y en a pas)
+  const c = Math.round(T * .52), x = (T - c) / 2, y = Math.round(T * .11), r = Math.round(T * .03);
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,.55)'; g.shadowBlur = 40; g.shadowOffsetY = 14;
+  g.beginPath(); g.roundRect ? g.roundRect(x, y, c, c, r) : g.rect(x, y, c, c); g.fillStyle = '#1d1830'; g.fill();
+  g.restore();
+  g.save(); g.beginPath(); g.roundRect ? g.roundRect(x, y, c, c, r) : g.rect(x, y, c, c); g.clip();
+  if (img) {
+    const k = Math.max(c / img.width, c / img.height);
+    g.drawImage(img, x + (c - img.width * k) / 2, y + (c - img.height * k) / 2, img.width * k, img.height * k);
+  } else {
+    const fond = g.createLinearGradient(x, y, x + c, y + c); fond.addColorStop(0, '#2b2348'); fond.addColorStop(1, '#4a3a6e');
+    g.fillStyle = fond; g.fillRect(x, y, c, c);
+    const R = c * .3, cx = x + c / 2, cy = y + c / 2;
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fillStyle = '#e8b04b'; g.fill();
+    g.strokeStyle = '#120e1f'; g.lineCap = 'round'; g.lineWidth = R * .16;
+    [[-14, 8], [-6, 22], [2, 32], [10, 18], [17, 6]].forEach(([dx, h]) => { g.beginPath(); g.moveTo(cx + dx * R / 29 * 1.0, cy - h * R / 58); g.lineTo(cx + dx * R / 29 * 1.0, cy + h * R / 58); g.stroke(); });
+  }
+  g.restore();
+  // Titre et artiste
+  g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#f3eefc';
+  const t1 = texteAjuste(g, titre || 'Sans titre', T * .86, Math.round(T * .058), 700);
+  g.fillText(t1, T / 2, y + c + Math.round(T * .11));
+  g.fillStyle = '#e8b04b';
+  const t2 = texteAjuste(g, artiste || '', T * .8, Math.round(T * .038), 400);
+  g.fillText(t2, T / 2, y + c + Math.round(T * .17));
+  // Signature
+  g.font = `700 ${Math.round(T * .026)}px Sora, sans-serif`;
+  g.fillStyle = 'rgba(243,238,252,.75)';
+  g.fillText('MongongoWay', T / 2, T - Math.round(T * .045));
+}
+
+// Crée une vidéo MP4 (image fixe + son) à partir d'un fichier audio, rapidement, sur le téléphone
+async function creerVideoDepuisAudio(son, infos, progres) {
+  if (!('VideoEncoder' in window) || !('AudioEncoder' in window)) throw new Error('Ce téléphone ne permet pas de créer la vidéo (navigateur trop ancien).');
+  const mb = await import(URL_MEDIABUNNY);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = TAILLE_VIDEO_AUDIO;
+  await dessinerImageVideo(canvas, infos);
+  const codecV = await mb.getFirstEncodableVideoCodec(['avc', 'vp9', 'av1'], { width: canvas.width, height: canvas.height });
+  const codecA = await mb.getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: Math.min(2, son.numberOfChannels), sampleRate: son.sampleRate });
+  if (!codecV || !codecA) throw new Error('Encodage vidéo indisponible sur ce téléphone.');
+  const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
+  const sourceV = new mb.CanvasSource(canvas, { codec: codecV, bitrate: 400_000, keyFrameInterval: 4 });
+  const sourceA = new mb.AudioBufferSource({ codec: codecA, bitrate: 128_000 });
+  output.addVideoTrack(sourceV, { frameRate: 1 });
+  output.addAudioTrack(sourceA);
+  await output.start();
+  const total = son.duration;
+  // Image fixe : une image par seconde suffit
+  for (let t = 0; t < total; t += 1) {
+    await sourceV.add(t, Math.min(1, total - t));
+    if (Math.round(t) % 15 === 0) progres?.(Math.min(0.5, (t / total) * 0.5));
+  }
+  progres?.(0.55);
+  await sourceA.add(son);
+  progres?.(0.9);
+  sourceV.close(); sourceA.close();
+  await output.finalize();
+  progres?.(1);
+  return { fichier: new File([output.target.buffer], 'clip.mp4', { type: 'video/mp4' }), largeur: canvas.width, hauteur: canvas.height, codecs: codecV + '/' + codecA };
+}
+
+async function decoderAudio(fichier) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new Ctx();
+  try { return await ctx.decodeAudioData(await fichier.arrayBuffer()); }
+  catch (_) { throw new Error('Fichier audio illisible. Essayez un fichier MP3 ou M4A.'); }
+  finally { ctx.close?.(); }
+}
+
+// =========================================================
+// TÉLÉCHARGEMENTS PROTÉGÉS : gardés DANS l'application, chiffrés
+// (pas de fichier dans la galerie ni dans les fichiers du téléphone ;
+//  partage uniquement par un lien qui ramène vers MongongoWay)
+// =========================================================
+function ouvrirCoffre() {
+  return new Promise((ok, ko) => {
+    const r = indexedDB.open('mongongo-coffre', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('cles');
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => ko(r.error);
+  });
+}
+let cleHorsLigne = null;
+async function cleChiffrement() {
+  if (cleHorsLigne) return cleHorsLigne;
+  const db = await ouvrirCoffre();
+  const lire = () => new Promise((ok, ko) => { const q = db.transaction('cles').objectStore('cles').get('hors-ligne'); q.onsuccess = () => ok(q.result); q.onerror = () => ko(q.error); });
+  let k = await lire();
+  if (!k) {
+    // Clé non exportable : elle ne peut pas sortir de l'application
+    k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await new Promise((ok, ko) => { const tx = db.transaction('cles', 'readwrite'); tx.objectStore('cles').put(k, 'hors-ligne'); tx.oncomplete = ok; tx.onerror = () => ko(tx.error); });
+  }
+  cleHorsLigne = k;
+  return k;
+}
+async function enregistrerHorsLigne(cle, blob, type, meta) {
+  const k = await cleChiffrement();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const chiffre = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, await blob.arrayBuffer());
+  const cache = await caches.open(CACHE_HORS_LIGNE);
+  await cache.put(cle, new Response(new Blob([iv, chiffre]), { headers: { 'Content-Type': 'application/octet-stream', 'X-MW-Type': type, 'X-MW-Chiffre': '1' } }));
+  if (meta) await cache.put(`/hors-ligne-meta/${meta.id}`, new Response(JSON.stringify({ ...meta, enregistre_le: new Date().toISOString() }), { headers: { 'Content-Type': 'application/json' } }));
+}
+async function lireHorsLigne(cle) {
+  let cache, r;
+  try { cache = await caches.open(CACHE_HORS_LIGNE); r = await cache.match(cle); } catch (_) { return null; }
+  if (!r) return null;
+  if (r.headers.get('X-MW-Chiffre') !== '1') {
+    // Ancienne copie non chiffrée (avant la v34) : on la protège au passage
+    const b = await r.blob();
+    enregistrerHorsLigne(cle, b, b.type || 'application/octet-stream').catch(() => {});
+    return b;
+  }
+  const brut = new Uint8Array(await r.arrayBuffer());
+  const clair = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: brut.slice(0, 12) }, await cleChiffrement(), brut.slice(12));
+  return new Blob([clair], { type: r.headers.get('X-MW-Type') || 'application/octet-stream' });
+}
+async function existeHorsLigne(cle) {
+  try { return !!(await (await caches.open(CACHE_HORS_LIGNE)).match(cle)); } catch (_) { return false; }
+}
+async function retirerHorsLigne(id) {
+  const cache = await caches.open(CACHE_HORS_LIGNE);
+  await Promise.all([cache.delete(`/hors-ligne/${id}`), cache.delete(`/hors-ligne-video/${id}`), cache.delete(`/hors-ligne-meta/${id}`)]);
+}
+async function listeHorsLigne() {
+  try {
+    const cache = await caches.open(CACHE_HORS_LIGNE);
+    const cles = (await cache.keys()).map((r) => new URL(r.url).pathname);
+    const ids = [...new Set(cles.map((p) => (p.match(/^\/hors-ligne(?:-video)?\/([^/]+)$/) || [])[1]).filter(Boolean))];
+    const res = [];
+    for (const id of ids) {
+      const m = await cache.match(`/hors-ligne-meta/${id}`);
+      const meta = m ? await m.json() : { id };
+      res.push({ ...meta, id, audio: cles.includes(`/hors-ligne/${id}`), video: cles.includes(`/hors-ligne-video/${id}`) });
+    }
+    return res.sort((a, b) => String(b.enregistre_le || '').localeCompare(String(a.enregistre_le || '')));
+  } catch (_) { return []; }
+}
+
+// Partager une chanson : uniquement par un lien vers MongongoWay
+async function partagerTitre(t) {
+  const lien = `${location.origin}${location.pathname}#/titre/${t.id}`;
+  const texte = `Écoutez « ${t.titre} »${t.artistes?.nom_scene || t.artiste ? ' de ' + (t.artistes?.nom_scene || t.artiste) : ''} sur MongongoWay`;
+  try {
+    if (navigator.share) { await navigator.share({ title: t.titre, text: texte, url: lien }); return; }
+  } catch (e) { if (e?.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(`${texte} : ${lien}`); toast('Lien copié : collez-le dans WhatsApp, SMS…'); }
+  catch (_) { ouvrirModale(`<h2 style="margin-top:0">Partager</h2><p class="doux petit">Copiez ce lien :</p><input value="${esc(lien)}" readonly onclick="this.select()">`); }
+}
+
+// Empêche « Enregistrer la vidéo sous… » et le menu du lecteur
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('video, audio, .clip, .cadre-video')) e.preventDefault(); });
+
+
+// =========================================================
 // LECTEUR
 // =========================================================
 const audio = $('#audio');
@@ -362,9 +556,8 @@ const audio = $('#audio');
 async function urlAudio(t) {
   // 1) Copie hors ligne (titre acheté)
   try {
-    const cache = await caches.open(CACHE_HORS_LIGNE);
-    const rep = await cache.match(`/hors-ligne/${t.id}`);
-    if (rep) return URL.createObjectURL(await rep.blob());
+    const b = await lireHorsLigne(`/hors-ligne/${t.id}`);
+    if (b) return URL.createObjectURL(b);
   } catch (_) { /* Cache indisponible */ }
   // 2) Écoute en ligne (lien temporaire) : fichier audio, sinon le son de la vidéo
   const { data, error } = t.audio_path
@@ -483,23 +676,21 @@ async function vueTitre(id) {
   (achat || []).forEach((a) => { achete[a.format || 'audio'] = true; });
   const cleHL = { audio: `/hors-ligne/${t.id}`, video: `/hors-ligne-video/${t.id}` };
   const hors = { audio: false, video: false };
-  try {
-    const cache = await caches.open(CACHE_HORS_LIGNE);
-    hors.audio = !!(await cache.match(cleHL.audio));
-    hors.video = !!(await cache.match(cleHL.video));
-  } catch (_) {}
+  hors.audio = await existeHorsLigne(cleHL.audio);
+  hors.video = await existeHorsLigne(cleHL.video);
   const formats = t.video_path ? ['audio', 'video'] : ['audio'];
 
   const enCours = etat.enCours?.id === t.id && !audio.paused;
   vue.innerHTML = `
     <div class="detail-tete">
-      ${t.video_path ? `<div class="clip" style="--ratio:${t.video_largeur && t.video_hauteur ? (t.video_largeur / t.video_hauteur).toFixed(4) : '1.7778'}"><video id="clip" controls playsinline preload="none" ${t.pochette_path ? `poster="${esc(urlPochette(t.pochette_path))}"` : ''}></video><button class="clip-lancer" id="clip-lancer">▶ Regarder le clip</button></div>` : imgPochette(t.pochette_path)}
+      ${t.video_path ? `<div class="clip" style="--ratio:${t.video_largeur && t.video_hauteur ? (t.video_largeur / t.video_hauteur).toFixed(4) : '1.7778'}"><video id="clip" controls controlslist="nodownload noplaybackrate" disablepictureinpicture playsinline preload="none" ${t.pochette_path ? `poster="${esc(urlPochette(t.pochette_path))}"` : ''}></video><button class="clip-lancer" id="clip-lancer">▶ Regarder le clip</button></div>` : imgPochette(t.pochette_path)}
       <h1>${esc(t.titre)}</h1>
       <div class="doux"><a href="#/a/${t.artistes?.id}">${esc(t.artistes?.nom_scene || '')}</a>${t.album ? ' · ' + esc(t.album) : ''}${t.genre ? ' · ' + esc(t.genre) : ''}</div>
       ${t.statut !== 'publie' ? `<div style="margin-top:8px"><span class="badge ${t.statut}">${STATUTS_TITRE[t.statut]}</span></div>` : ''}
       <div class="actions">
         <button class="btn" id="btn-ecouter" data-id="${t.id}">${enCours ? '❚❚ Pause' : '▶ Écouter'}</button>
         <button class="btn secondaire" id="btn-like">${monLike ? '<span class="aime">♥</span>' : '♡'} <span id="nb-likes">${nbLikes || 0}</span></button>
+        ${t.statut === 'publie' ? '<button class="btn secondaire" id="btn-partager" title="Partager le lien">↗ Partager</button>' : ''}
       </div>
       ${t.statut === 'publie' ? `<div class="actions" style="margin-top:0"><button class="btn secondaire" id="btn-telecharger">⤓ Télécharger${formats.every((f) => hors[f]) ? ' · ✓ hors ligne' : ''}</button></div>` : ''}
       ${estAdmin() && t.video_path ? `<div class="actions" style="margin-top:0"><button class="btn secondaire petit" id="btn-remplacer">⟳ Remplacer la vidéo</button><input type="file" id="fichier-remplacer" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp" class="cache"></div>` : ''}
@@ -517,6 +708,7 @@ async function vueTitre(id) {
     <div id="coms">${(coms || []).map(commentaireHtml).join('') || '<p class="doux petit">Soyez le premier à commenter.</p>'}</div>` : ''}`;
 
   $('#btn-ecouter').onclick = () => (etat.enCours?.id === t.id ? basculerLecture() : jouer(t));
+  $('#btn-partager')?.addEventListener('click', () => partagerTitre(t));
 
   // Administrateur : remplacer le fichier vidéo sans toucher au reste (lectures, auditeurs, pochette, paroles…)
   $('#btn-remplacer')?.addEventListener('click', () => $('#fichier-remplacer').click());
@@ -579,7 +771,7 @@ async function vueTitre(id) {
     try {
       const v = $('#clip');
       let src = null;
-      try { const r = await (await caches.open(CACHE_HORS_LIGNE)).match(cleHL.video); if (r) src = URL.createObjectURL(await r.blob()); } catch (_) {}
+      try { const b = await lireHorsLigne(cleHL.video); if (b) src = URL.createObjectURL(b); } catch (_) {}
       if (!src) {
         const { data, error } = await sb.storage.from('videos').createSignedUrl(t.video_path, 60 * 60 * 3);
         if (error) throw error;
@@ -604,7 +796,7 @@ async function vueTitre(id) {
     const ligne = (f) => {
       const nom = f === 'audio' ? 'Audio (MP3)' : 'Vidéo (MP4)';
       const prix = f === 'audio' ? t.prix_telechargement : t.prix_video;
-      const etatF = hors[f] ? '✓ Déjà sur ce téléphone' : achete[f] ? 'Déjà acheté' : estAbonne() ? 'Inclus dans votre abonnement' : montant(prix, t.devise);
+      const etatF = hors[f] ? '✓ Déjà dans l\'application' : achete[f] ? 'Déjà acheté' : estAbonne() ? 'Inclus dans votre abonnement' : montant(prix, t.devise);
       const note = f === 'audio' && !t.audio_path ? 'Le son est tiré de la vidéo sur votre téléphone' : f === 'audio' ? 'Le son seul, plus léger' : 'Le clip complet';
       return `<button class="carte" data-format="${f}" style="width:100%;text-align:left;cursor:pointer;color:var(--texte);font:inherit;display:flex;align-items:center;gap:12px">
         <span style="font-size:24px">${f === 'audio' ? '♪' : '▶'}</span>
@@ -613,14 +805,14 @@ async function vueTitre(id) {
     };
     ouvrirModale(`
       <h2 style="margin-top:0">Télécharger « ${esc(t.titre)} »</h2>
-      <p class="doux petit">Choisissez le format. Le fichier sera enregistré dans l'application pour une écoute sans internet.</p>
+      <p class="doux petit">Choisissez le format. La chanson reste <b>dans l'application</b> (espace « Mes téléchargements ») pour l'écouter sans internet. Elle n'est pas copiée dans le téléphone : pour la faire découvrir, partagez son lien.</p>
       ${formats.map(ligne).join('')}
       <div class="progression cache" id="prog-tel"><div></div></div>
       <p class="doux petit cache" id="etat-tel" style="text-align:center"></p>
       <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Fermer</button>`);
     $$('#modale [data-format]').forEach((b) => b.onclick = async () => {
       const f = b.dataset.format;
-      if (hors[f]) return toast(f === 'audio' ? 'L\'audio est déjà sur ce téléphone.' : 'La vidéo est déjà sur ce téléphone.');
+      if (hors[f]) return toast(f === 'audio' ? 'L\'audio est déjà dans vos téléchargements.' : 'La vidéo est déjà dans vos téléchargements.');
       if (!achete[f] && !estAbonne()) { fermerModale(); return modalePaiement(t, 'telechargement', f); }
       $$('#modale [data-format]').forEach((x) => x.disabled = true);
       const prog = $('#prog-tel'), info = $('#etat-tel');
@@ -646,10 +838,13 @@ async function vueTitre(id) {
             fichier = r.fichier; typeF = 'audio/mpeg';
           }
         }
-        const cache = await caches.open(CACHE_HORS_LIGNE);
-        await cache.put(cleHL[f], new Response(fichier, { headers: { 'Content-Type': typeF } }));
+        avancer(0.97, 'Protection du fichier dans l\'application…');
+        await enregistrerHorsLigne(cleHL[f], fichier, typeF, {
+          id: t.id, titre: t.titre, artiste: t.artistes?.nom_scene || '', pochette_path: t.pochette_path || null,
+          duree_sec: t.duree_sec || null, video_largeur: t.video_largeur || null, video_hauteur: t.video_hauteur || null
+        });
         hors[f] = true;
-        avancer(1, f === 'audio' ? '✓ Audio enregistré : écoutez-le sans internet.' : '✓ Vidéo enregistrée : regardez-la sans internet.');
+        avancer(1, f === 'audio' ? '✓ Audio gardé dans l\'application : écoutez-le sans internet.' : '✓ Vidéo gardée dans l\'application : regardez-la sans internet.');
         toast(info.textContent);
         setTimeout(() => { fermerModale(); vueTitre(t.id); }, 1200);
       } catch (err) {
@@ -857,10 +1052,25 @@ async function vueDeposer() {
       <label for="d-genre">Genre</label>
       <select id="d-genre">${GENRES.map((g) => `<option>${g}</option>`).join('')}</select>
 
-      <label for="d-video">Vidéo du chant (MP4, 50 Mo max. après compression)</label>
-      <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp" required>
-      <p class="doux petit" style="margin:6px 0 0">Publiez uniquement la vidéo. Les croyants pourront l'écouter en audio, et la télécharger en audio (le son est tiré de la vidéo) ou en vidéo.</p>
-      <div id="bloc-compression" class="carte cache" style="margin:10px 0 0"></div>
+      <label>Que déposez-vous ?</label>
+      <div class="choix-depot">
+        <label><input type="radio" name="mode" value="video" checked><span>🎬 <b>Une vidéo</b><br><span class="doux petit">Le clip est publié tel quel</span></span></label>
+        <label><input type="radio" name="mode" value="audio"><span>🎵 <b>Un audio</b><br><span class="doux petit">Une vidéo est créée avec la pochette, le titre et votre nom</span></span></label>
+      </div>
+
+      <div id="bloc-mode-video">
+        <label for="d-video">Vidéo du chant (MP4, 50 Mo max. après compression)</label>
+        <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp">
+        <p class="doux petit" style="margin:6px 0 0">Les croyants pourront l'écouter, et la télécharger en audio (le son est tiré de la vidéo) ou en vidéo.</p>
+        <div id="bloc-compression" class="carte cache" style="margin:10px 0 0"></div>
+      </div>
+      <div id="bloc-mode-audio" class="cache">
+        <label for="d-audio">Fichier audio (MP3, M4A, WAV…)</label>
+        <input id="d-audio" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac">
+        <p class="doux petit" style="margin:6px 0 0">MongongoWay crée automatiquement la vidéo à partir de votre pochette, du titre et de votre nom d'artiste. Aperçu :</p>
+        <canvas id="apercu-video" width="480" height="480" class="apercu-video"></canvas>
+        <div id="info-audio" class="doux petit"></div>
+      </div>
 
       <label for="d-pochette">Pochette (image carrée, 5 Mo max., facultatif)</label>
       <input id="d-pochette" type="file" accept="image/jpeg,image/png,image/webp">
@@ -890,6 +1100,33 @@ async function vueDeposer() {
       <button class="btn plein" type="submit">Enregistrer le titre</button>
       <p class="doux petit" style="text-align:center">Le titre est d'abord enregistré en brouillon. Vous l'enverrez ensuite à l'administrateur pour validation.</p>
     </form>`;
+
+  // Choix Vidéo / Audio
+  const modeDepot = () => $('input[name=mode]:checked')?.value || 'video';
+  const dessinerApercu = () => {
+    if (modeDepot() !== 'audio') return;
+    dessinerImageVideo($('#apercu-video'), { titre: $('#d-titre').value.trim() || 'Titre de la chanson', artiste: etat.artiste?.nom_scene || '', pochette: $('#d-pochette').files[0] }).catch(() => {});
+  };
+  $$('input[name=mode]').forEach((x) => x.onchange = () => {
+    const audioMode = modeDepot() === 'audio';
+    $('#bloc-mode-video').classList.toggle('cache', audioMode);
+    $('#bloc-mode-audio').classList.toggle('cache', !audioMode);
+    $('#bloc-prix-video').classList.toggle('cache', audioMode ? false : !$('#d-video').files[0]);
+    dessinerApercu();
+  });
+  $('#d-titre').addEventListener('input', () => { clearTimeout(dessinerApercu.t); dessinerApercu.t = setTimeout(dessinerApercu, 300); });
+  $('#d-pochette').addEventListener('change', dessinerApercu);
+  let sonDepot = null;
+  $('#d-audio').onchange = async () => {
+    const f = $('#d-audio').files[0]; sonDepot = null;
+    const info = $('#info-audio');
+    if (!f) { info.textContent = ''; return; }
+    info.textContent = 'Lecture du fichier audio…';
+    try {
+      sonDepot = await decoderAudio(f);
+      info.textContent = `${(f.size / 1048576).toFixed(1).replace('.', ',')} Mo · ${duree(Math.round(sonDepot.duration))}`;
+    } catch (err) { info.innerHTML = `<span style="color:var(--rouge)">${esc(err.message)}</span>`; }
+  };
 
   // Analyse de la vidéo choisie et proposition de compression
   let infoVid = null;
@@ -927,6 +1164,7 @@ async function vueDeposer() {
   const horo = Date.now();
   $('#form-depot').onsubmit = async (e) => {
     e.preventDefault();
+    if (modeDepot() === 'audio') return deposerAudio(e);
     let fVid = $('#d-video').files[0];
 
     const fImg = $('#d-pochette').files[0];
@@ -1006,7 +1244,8 @@ async function vueDeposer() {
         duree_sec: dureeSec || null,
         prix_telechargement: Number($('#d-prix').value),
         prix_video: fVid ? Number($('#d-prix-video').value || prixVideoDefaut) : prixVideoDefaut,
-        devise: 'USD'
+        devise: 'USD',
+        origine: 'video'
       });
       if (error) throw error;
       avancer(100, 'Terminé ✓');
@@ -1024,6 +1263,107 @@ async function vueDeposer() {
       prog.classList.add('cache');
     }
   };
+
+  // Dépôt d'un AUDIO : on garde l'audio et on crée la vidéo (pochette + titre + artiste)
+  async function deposerAudio(e) {
+    const fAud = $('#d-audio').files[0];
+    const fImg = $('#d-pochette').files[0];
+    if (!fAud) return toast('Choisissez le fichier audio.', true);
+    if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
+    const titre = $('#d-titre').value.trim();
+    const bouton = e.submitter; bouton.disabled = true;
+    const prog = $('#prog'); prog.classList.remove('cache');
+    const avancer = (p, msg) => { prog.firstElementChild.style.width = p + '%'; bouton.textContent = msg; };
+    const uid = etat.session.user.id;
+    const etape = { nom: 'lecture de l\'audio' };
+    $('#erreur-depot').classList.add('cache');
+    let verrouEcran = null;
+    try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
+    try {
+      avancer(2, 'Lecture de l\'audio…');
+      const son = sonDepot || await decoderAudio(fAud);
+      const dureeSec = Math.round(son.duration) || null;
+      if (son.duration > 20 * 60) throw new Error('Audio trop long (20 minutes maximum).');
+
+      // 1) Fichier audio à envoyer : l'original s'il est accepté (MP3/M4A ≤ 30 Mo), sinon conversion en MP3
+      const typesOk = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/x-m4a', 'audio/m4a'];
+      const ext0 = (fAud.name.split('.').pop() || '').toLowerCase();
+      let fichierAudio = fAud, typeA = fAud.type === 'audio/mp3' ? 'audio/mpeg' : fAud.type, extA = ext0;
+      if (!typesOk.includes(fAud.type) || fAud.size > 30 * 1024 * 1024) {
+        etape.nom = 'conversion en MP3';
+        const r = await extraireAudio(fAud, (x) => avancer(4 + Math.round(x * 18), `Conversion en MP3… ${Math.round(x * 100)} %`), son);
+        fichierAudio = r.fichier; typeA = 'audio/mpeg'; extA = 'mp3';
+        if (fichierAudio.size > 30 * 1024 * 1024) throw new Error('Audio trop lourd, même converti (30 Mo max.).');
+      }
+      if (typeA === 'audio/m4a') typeA = 'audio/x-m4a';
+      if (!extA || extA.length > 4) extA = typeA === 'audio/mpeg' ? 'mp3' : 'm4a';
+
+      // 2) Création de la vidéo sur le téléphone
+      etape.nom = 'création de la vidéo';
+      let video = null;
+      try {
+        video = await creerVideoDepuisAudio(son, { titre, artiste: etat.artiste?.nom_scene || '', pochette: fImg }, (x) => avancer(22 + Math.round(x * 30), `Création de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
+        if (video.fichier.size > 50 * 1024 * 1024) { console.warn('Vidéo générée trop lourde'); video = null; }
+      } catch (err) {
+        console.error(err);
+        toast('La vidéo n\'a pas pu être créée sur ce téléphone : le titre sera publié en audio seul.');
+      }
+
+      // 3) Envois
+      const cheminAud = `${uid}/${horo}.${extA}`;
+      etape.nom = 'envoi de l\'audio';
+      let dernier = 52;
+      await envoyerFichier('audio', cheminAud, fichierAudio, typeA, (x, detail) => { if (x === null) return avancer(dernier, `Envoi de l'audio : ${detail}`); dernier = 52 + Math.round(x * 14); avancer(dernier, `Envoi de l'audio… ${Math.round(x * 100)} %`); });
+      let cheminVid = null;
+      if (video) {
+        cheminVid = `${uid}/${horo}.mp4`;
+        etape.nom = 'envoi de la vidéo créée';
+        dernier = 66;
+        await envoyerFichier('videos', cheminVid, video.fichier, 'video/mp4', (x, detail) => { if (x === null) return avancer(dernier, `Envoi de la vidéo : ${detail}`); dernier = 66 + Math.round(x * 18); avancer(dernier, `Envoi de la vidéo… ${Math.round(x * 100)} %`); });
+      }
+      let cheminImg = null;
+      if (fImg) {
+        avancer(86, 'Envoi de la pochette…');
+        etape.nom = 'envoi de la pochette';
+        cheminImg = `${uid}/${horo}.${(fImg.name.split('.').pop() || 'jpg').toLowerCase()}`;
+        const upI = await sb.storage.from('pochettes').upload(cheminImg, fImg, { contentType: fImg.type, upsert: true });
+        if (upI.error) throw upI.error;
+      }
+
+      etape.nom = 'enregistrement du titre';
+      avancer(95, 'Enregistrement…');
+      const album = $('#d-album').value.trim() || null;
+      const piste = Number($('#d-piste').value) || (album ? Number($('#d-piste').placeholder) || null : null);
+      const { error } = await sb.from('titres').insert({
+        artiste_id: etat.artiste.id, titre, genre: $('#d-genre').value, album, piste,
+        paroles: $('#d-paroles').value.trim() || null,
+        audio_path: cheminAud,
+        video_path: cheminVid,
+        video_largeur: video ? video.largeur : null,
+        video_hauteur: video ? video.hauteur : null,
+        pochette_path: cheminImg,
+        duree_sec: dureeSec,
+        prix_telechargement: Number($('#d-prix').value),
+        prix_video: Number($('#d-prix-video').value || prixVideoDefaut),
+        devise: 'USD',
+        origine: 'audio'
+      });
+      if (error) throw error;
+      avancer(100, 'Terminé ✓');
+      try { verrouEcran?.release(); } catch (_) {}
+      toast(video ? 'Titre enregistré avec sa vidéo. Envoyez-le maintenant pour validation.' : 'Titre enregistré (audio). Envoyez-le maintenant pour validation.');
+      location.hash = '#/artiste';
+    } catch (err) {
+      erreur(err);
+      const zoneErr = $('#erreur-depot');
+      zoneErr.innerHTML = `<b style="color:var(--rouge)">Échec à l'étape : ${esc(etape.nom)}</b><p class="petit" style="margin:6px 0 0">${esc(err?.message || String(err))}</p><p class="doux petit" style="margin:6px 0 0">Réessayez. Si l'erreur revient, faites une capture de ce message.</p>`;
+      zoneErr.classList.remove('cache');
+      zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      bouton.disabled = false; bouton.textContent = 'Réessayer';
+      try { verrouEcran?.release(); } catch (_) {}
+      prog.classList.add('cache');
+    }
+  }
 }
 
 // Envoi d'un fichier vers Supabase Storage.
@@ -1186,14 +1526,14 @@ async function compresserTempsReel(fichier, cible, debit, progres) {
 }
 
 // Tire l'audio d'une vidéo et l'encode en MP3 (128 kb/s), directement sur le téléphone
-async function extraireAudio(fichierVideo, progres) {
+async function extraireAudio(fichierVideo, progres, sonDecode = null) {
   const lame = await import('https://cdn.jsdelivr.net/npm/@breezystack/lamejs@1.2.7/+esm');
   const Encodeur = lame.Mp3Encoder || lame.default?.Mp3Encoder;
   if (!Encodeur) throw new Error('Encodeur MP3 indisponible');
   const Ctx = window.AudioContext || window.webkitAudioContext;
   const ctx = new Ctx({ sampleRate: 44100 });
-  let son;
-  try { son = await ctx.decodeAudioData(await fichierVideo.arrayBuffer()); }
+  let son = sonDecode;
+  try { if (!son) son = await ctx.decodeAudioData(await fichierVideo.arrayBuffer()); }
   finally { ctx.close?.(); }
   const canaux = Math.min(2, son.numberOfChannels);
   const enc = new Encodeur(canaux, son.sampleRate, 128);
@@ -1287,16 +1627,75 @@ async function vueProfil() {
 
 async function vueAchats() {
   chargement();
-  const { data, error } = await sb.from('achats')
-    .select('cree_le, format, titres(id, titre, genre, pochette_path, audio_path, video_path, duree_sec, artistes(nom_scene))')
-    .eq('profil_id', etat.session.user.id).order('cree_le', { ascending: false });
-  if (error) throw error;
-  const vus = new Set();
-  const titres = (data || []).map((a) => a.titres).filter((t) => t && !vus.has(t.id) && vus.add(t.id));
-  vue.innerHTML = `<h1>Mes téléchargements</h1><div id="liste" class="liste"></div>`;
-  etat.file = titres;
-  $('#liste').innerHTML = titres.length ? titres.map(ligneTitre).join('') : '<div class="vide"><span class="grand">⤓</span>Vous n\'avez encore téléchargé aucun titre.</div>';
-  brancherLignes($('#liste'));
+  const locaux = await listeHorsLigne();
+  let enLigne = [];
+  try {
+    if (navigator.onLine) {
+      const { data, error } = await sb.from('achats')
+        .select('cree_le, format, titres(id, titre, genre, pochette_path, audio_path, video_path, duree_sec, artistes(nom_scene))')
+        .eq('profil_id', etat.session.user.id).order('cree_le', { ascending: false });
+      if (error) throw error;
+      const vus = new Set(locaux.map((x) => x.id));
+      enLigne = (data || []).map((a) => a.titres).filter((t) => t && !vus.has(t.id) && vus.add(t.id));
+    }
+  } catch (_) { /* hors connexion : on affiche seulement ce qui est dans l'application */ }
+
+  const titresLocaux = locaux.map((m) => ({
+    id: m.id, titre: m.titre || 'Titre', pochette_path: m.pochette_path, duree_sec: m.duree_sec,
+    video_largeur: m.video_largeur, video_hauteur: m.video_hauteur,
+    artistes: { nom_scene: m.artiste || '' },
+    audio_path: m.audio ? 'hors-ligne' : null, video_path: m.video ? 'hors-ligne' : null,
+    _audio: m.audio, _video: m.video
+  }));
+
+  vue.innerHTML = `
+    <h1>Mes téléchargements</h1>
+    <p class="doux petit">Ces chansons sont gardées <b>dans MongongoWay</b> et s'écoutent sans internet. Elles sont protégées : pour les faire découvrir, partagez leur lien.</p>
+    ${!navigator.onLine ? '<div class="carte petit" style="border-color:var(--or)">📴 Vous êtes hors connexion : vos téléchargements restent disponibles.</div>' : ''}
+    <div id="liste-hl" class="liste">${titresLocaux.length ? titresLocaux.map((t) => `
+      <div class="ligne-titre ligne-hl" data-id="${t.id}">
+        ${imgPochette(t.pochette_path)}
+        <div class="lt-infos">
+          <div class="lt-titre">${esc(t.titre)}</div>
+          <div class="lt-artiste">${esc(t.artistes.nom_scene)}${t.duree_sec ? ' · ' + duree(t.duree_sec) : ''}</div>
+          <div class="hl-actions">
+            ${t._video ? '<button class="btn secondaire petit" data-clip>▶ Clip</button>' : ''}
+            <button class="btn secondaire petit" data-partager>↗ Partager le lien</button>
+            <button class="btn secondaire petit" data-retirer>✕ Retirer</button>
+          </div>
+        </div>
+        ${t._audio ? `<button class="lt-play" data-jouer="${t.id}" aria-label="Écouter">▶</button>` : ''}
+      </div>`).join('') : '<div class="vide"><span class="grand">⤓</span>Aucune chanson gardée pour l\'écoute sans internet.<br><span class="petit">Ouvrez un titre puis « ⤓ Télécharger ».</span></div>'}</div>
+    ${enLigne.length ? `<h2>Achetés, à remettre hors ligne</h2><p class="doux petit">Ouvrez le titre puis « ⤓ Télécharger » pour le garder dans l'application (sans payer à nouveau).</p><div id="liste" class="liste"></div>` : ''}`;
+
+  $$('#liste-hl .ligne-hl').forEach((l) => {
+    const t = titresLocaux.find((x) => x.id === l.dataset.id);
+    l.onclick = async (e) => {
+      if (e.target.closest('[data-jouer]')) {
+        etat.file = titresLocaux.filter((x) => x._audio);
+        return etat.enCours?.id === t.id ? basculerLecture() : jouer(t);
+      }
+      if (e.target.closest('[data-clip]')) {
+        try {
+          const b = await lireHorsLigne(`/hors-ligne-video/${t.id}`);
+          if (!b) return toast('Vidéo introuvable.', true);
+          audio.pause();
+          ouvrirModale(`<h2 style="margin-top:0">${esc(t.titre)}</h2><video class="video-adaptee" src="${URL.createObjectURL(b)}" controls controlslist="nodownload" disablepictureinpicture autoplay playsinline></video><button class="btn secondaire plein" data-fermer>Fermer</button>`);
+        } catch (err) { erreur(err); }
+        return;
+      }
+      if (e.target.closest('[data-partager]')) return partagerTitre(t);
+      if (e.target.closest('[data-retirer]')) {
+        if (!confirm(`Retirer « ${t.titre} » de vos téléchargements ? Vous pourrez le télécharger à nouveau sans payer.`)) return;
+        await retirerHorsLigne(t.id);
+        toast('Retiré des téléchargements.');
+        return vueAchats();
+      }
+      if (navigator.onLine) location.hash = `#/titre/${t.id}`;
+      else toast('Hors connexion : touchez ▶ pour écouter.');
+    };
+  });
+  if (enLigne.length) { etat.file = enLigne; $('#liste').innerHTML = enLigne.map(ligneTitre).join(''); brancherLignes($('#liste')); }
 }
 
 // =========================================================
@@ -1396,7 +1795,7 @@ async function vueAdmin(onglet = 'artistes') {
         const { data: u, error: eu } = await sb.storage.from('videos').createSignedUrl(tc.video_path, 3600);
         if (eu) return erreur(eu);
         audio.pause();
-        ouvrirModale(`<h2 style="margin-top:0">${esc(tc.titre)}</h2><video class="video-adaptee" src="${esc(u.signedUrl)}" controls autoplay playsinline></video><button class="btn secondaire plein" data-fermer>Fermer</button>`);
+        ouvrirModale(`<h2 style="margin-top:0">${esc(tc.titre)}</h2><video class="video-adaptee" src="${esc(u.signedUrl)}" controls controlslist="nodownload" autoplay playsinline></video><button class="btn secondaire plein" data-fermer>Fermer</button>`);
         return;
       }
       const b = e.target.closest('[data-titre]');
@@ -1693,7 +2092,7 @@ async function regarderClips(clips, index) {
   audio.pause();
   try {
     let src = null;
-    try { const r = await (await caches.open(CACHE_HORS_LIGNE)).match(`/hors-ligne-video/${t.id}`); if (r) src = URL.createObjectURL(await r.blob()); } catch (_) {}
+    try { const b = await lireHorsLigne(`/hors-ligne-video/${t.id}`); if (b) src = URL.createObjectURL(b); } catch (_) {}
     if (!src) {
       const { data, error } = await sb.storage.from('videos').createSignedUrl(t.video_path, 60 * 60 * 3);
       if (error) throw error;
@@ -1702,7 +2101,7 @@ async function regarderClips(clips, index) {
     ouvrirModale(`
       <div class="doux petit">${index + 1} / ${clips.length}${estAbonne() ? ' · clips à la suite' : ''}</div>
       <h2 style="margin:4px 0 10px">${esc(t.titre)} <span class="doux petit">· ${esc(t.artistes?.nom_scene || '')}</span></h2>
-      <video id="clip-plein" class="video-adaptee" src="${esc(src)}" controls autoplay playsinline></video>
+      <video id="clip-plein" class="video-adaptee" src="${esc(src)}" controls controlslist="nodownload" disablepictureinpicture autoplay playsinline></video>
       <div class="actions">
         <button class="btn secondaire petit" id="clip-prec" ${index === 0 ? 'disabled' : ''}>⏮ Précédent</button>
         <button class="btn secondaire petit" data-fermer>Fermer</button>

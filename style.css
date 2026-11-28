@@ -608,3 +608,14 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
 .onglets-fil button { padding-left: 6px; padding-right: 6px; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 .onglets-fil .point-direct { width: 8px; height: 8px; }
 @media (max-width: 380px) { .onglets-fil button { font-size: 14px; } }
+
+/* v34 : dépôt audio ou vidéo, téléchargements protégés */
+.choix-depot { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+.choix-depot label { display: flex; gap: 10px; align-items: flex-start; margin: 0; padding: 12px; border: 1px solid var(--bord, rgba(255,255,255,.12)); border-radius: 14px; background: var(--carte, rgba(255,255,255,.04)); color: var(--texte); cursor: pointer; }
+.choix-depot label:has(input:checked) { border-color: var(--or); box-shadow: 0 0 0 1px var(--or) inset; }
+.choix-depot input { width: auto; margin-top: 4px; accent-color: var(--or); }
+.apercu-video { display: block; width: 100%; max-width: 320px; aspect-ratio: 1; margin: 10px auto 6px; border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.hl-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hl-actions .btn { padding: 5px 10px; font-size: 12px; }
+.ligne-hl { align-items: flex-start; }
+@media (max-width: 420px) { .choix-depot { grid-template-columns: 1fr; } }
