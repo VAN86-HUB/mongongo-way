@@ -253,7 +253,7 @@ async function rappelEvenements() {
   fin.setHours(23, 59, 59, 999);
   let data = null, error = null;
   try {
-    ({ data, error } = await sb.from('publications').select('id, evt_titre, evt_date, evt_lieu, billetterie, prix_billet, devise_billet')
+    ({ data, error } = await sb.from('publications').select('id, evt_titre, evt_date, evt_lieu, billetterie, billet_par_categorie, prix_billet, devise_billet, categories_billets(id, nom, prix, devise, ordre)')
       .eq('type', 'evenement').eq('statut', 'publie')
       .gte('evt_date', new Date(Date.now() - 3 * 3600e3).toISOString()).lte('evt_date', fin.toISOString())
       .order('evt_date', { ascending: true }).limit(10));
@@ -267,8 +267,8 @@ async function rappelEvenements() {
   const message = (p) => {
     if (!p.billetterie) return '<span class="rappel-msg">🙏 Préparez-vous pour y participer.</span>';
     const b = etat.mesBillets[p.id];
-    if (b) return `<span class="rappel-msg ok">✓ Vous avez votre billet${b.quantite > 1 ? ` (${b.quantite} places)` : ''}. Préparez-vous, et gardez votre code : <b>${esc(b.codes[0])}</b></span>`;
-    return `<span class="rappel-msg">🎟 Vous n'avez pas encore de billet (${montant(p.prix_billet, p.devise_billet)}).</span><span class="btn petit rappel-achat" data-acheter="${p.id}">Acheter mon billet</span>`;
+    if (b) return `<span class="rappel-msg ok">✓ Vous avez votre billet${b.categories.length ? ' ' + esc(b.categories.join(', ')) : ''}${b.quantite > 1 ? ` (${b.quantite} places)` : ''}. Préparez-vous, et gardez votre code : <b>${esc(b.codes[0])}</b></span>`;
+    return `<span class="rappel-msg">🎟 Vous n'avez pas encore de billet (${prixAffiche(p)}).</span><span class="btn petit rappel-achat" data-acheter="${p.id}">Acheter mon billet</span>`;
   };
   ouvrirModale(`
     <div class="rappel-evt">
@@ -2621,7 +2621,7 @@ async function vueFil(onglet = 'actualites') {
   const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }, , { data: enCoursDirect }] = await Promise.all([
     (type === 'evenement'
       // Un événement disparaît à minuit, juste après sa date (il reste visible toute la journée de l'événement)
-      ? sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type).gte('evt_date', debutDuJour().toISOString())
+      ? sb.from('publications').select('*, profils!auteur_id(nom_complet), categories_billets(id, nom, prix, devise, ordre)').eq('type', type).gte('evt_date', debutDuJour().toISOString())
       : sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type))
       .or(`statut.eq.publie,auteur_id.eq.${uid}`)
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
@@ -2750,14 +2750,16 @@ async function vueFil(onglet = 'actualites') {
     try {
       const d = new Date($('#evt-date').value);
       if (isNaN(d)) throw new Error('Choisissez la date et l\'heure.');
-      lireChampsBillet();   // vérifie le prix si les billets sont en ligne
+      lireChampsBillet();   // vérifie le prix ou les catégories si les billets sont en ligne
+      const cats = lireCategories();
       const images = await envoyerImages(photosEvt.fichiers(), b);
-      const { error: e2 } = await sb.from('publications').insert({
+      const { data: cree, error: e2 } = await sb.from('publications').insert({
         auteur_id: uid, type: 'evenement', evt_titre: $('#evt-titre').value.trim(), evt_date: d.toISOString(),
         evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, images, image_path: images[0] || null,
         ...lireChampsBillet()
-      });
+      }).select('id').single();
       if (e2) { if (images.length) sb.storage.from('publications').remove(images); throw e2; }
+      if (cats.length) await enregistrerCategories(cree.id, cats);
       apresEnvoi(); vueFil('evenements');
     } catch (err) { erreur(err); b.disabled = false; b.textContent = libelle; }
   });
@@ -2839,37 +2841,100 @@ etat.mesBillets = {};
 async function chargerMesBillets() {
   if (!etat.session) return {};
   try {
-    const { data } = await sb.from('billets').select('publication_id, quantite, code, statut').eq('profil_id', etat.session.user.id).eq('statut', 'paye');
+    const { data } = await sb.from('billets').select('publication_id, quantite, code, statut, categorie_nom').eq('profil_id', etat.session.user.id).eq('statut', 'paye');
     const m = {};
-    (data || []).forEach((b) => { const x = m[b.publication_id] ||= { quantite: 0, codes: [] }; x.quantite += b.quantite || 1; x.codes.push(b.code); });
+    (data || []).forEach((b) => {
+      const x = m[b.publication_id] ||= { quantite: 0, codes: [], categories: [], details: [] };
+      x.quantite += b.quantite || 1; x.codes.push(b.code); x.details.push(b);
+      if (b.categorie_nom && !x.categories.includes(b.categorie_nom)) x.categories.push(b.categorie_nom);
+    });
     etat.mesBillets = m;
   } catch (_) {}
   return etat.mesBillets;
 }
 function champsBillet(p = {}) {
+  const cats = (p.categories_billets || []).slice().sort((x, y) => (x.ordre || 0) - (y.ordre || 0));
+  const lignes = cats.length ? cats : [{ nom: 'Standard', prix: '' }, { nom: 'VIP', prix: '' }];
   return `
     <label class="case-billet"><input type="checkbox" id="evt-billet" ${p.billetterie ? 'checked' : ''}> <span>🎟 <b>Billets en ligne</b><br><span class="doux petit">Les participants achètent leur billet dans MongongoWay</span></span></label>
-    <div id="bloc-prix-billet" class="${p.billetterie ? '' : 'cache'}">
-      <label for="evt-prix-billet">Prix du billet (USD)</label>
-      <input id="evt-prix-billet" type="number" min="0.5" step="0.5" value="${p.prix_billet ?? ''}" placeholder="Ex. 5">
+    <div id="bloc-prix-billet" class="bloc-config-billet ${p.billetterie ? '' : 'cache'}">
+      <div class="choix-depot" style="margin-top:8px">
+        <label><input type="radio" name="mode-billet" value="unique" ${p.billet_par_categorie ? '' : 'checked'}><span><b>Prix unique</b><br><span class="doux petit">Toutes catégories confondues</span></span></label>
+        <label><input type="radio" name="mode-billet" value="categories" ${p.billet_par_categorie ? 'checked' : ''}><span><b>Par catégorie</b><br><span class="doux petit">VIP, Standard… chacune son prix</span></span></label>
+      </div>
+      <div id="billet-unique" class="${p.billet_par_categorie ? 'cache' : ''}">
+        <label for="evt-prix-billet">Prix du billet (USD)</label>
+        <input id="evt-prix-billet" type="number" min="0.5" step="0.5" value="${p.prix_billet ?? ''}" placeholder="Ex. 5">
+      </div>
+      <div id="billet-categories" class="${p.billet_par_categorie ? '' : 'cache'}">
+        <label>Catégories et prix (USD)</label>
+        <div id="liste-categories">${lignes.map(ligneCategorie).join('')}</div>
+        <button type="button" class="btn secondaire petit" id="ajout-categorie" style="margin-top:8px">＋ Ajouter une catégorie</button>
+      </div>
     </div>`;
+}
+function ligneCategorie(c = {}) {
+  return `<div class="ligne-categorie">
+    <input class="cat-nom" maxlength="60" placeholder="Ex. VIP" value="${esc(c.nom || '')}">
+    <input class="cat-prix" type="number" min="0.5" step="0.5" placeholder="Prix" value="${c.prix ?? ''}">
+    <button type="button" class="lien-bouton cat-suppr" title="Enlever">✕</button>
+  </div>`;
 }
 function brancherChampsBillet() {
   const c = $('#evt-billet');
-  if (c) c.onchange = () => { $('#bloc-prix-billet').classList.toggle('cache', !c.checked); if (c.checked) $('#evt-prix-billet').focus(); };
+  if (!c) return;
+  c.onchange = () => $('#bloc-prix-billet').classList.toggle('cache', !c.checked);
+  $$('input[name=mode-billet]').forEach((r) => r.onchange = () => {
+    const cat = $('input[name=mode-billet]:checked').value === 'categories';
+    $('#billet-unique').classList.toggle('cache', cat);
+    $('#billet-categories').classList.toggle('cache', !cat);
+  });
+  $('#ajout-categorie').onclick = () => { $('#liste-categories').insertAdjacentHTML('beforeend', ligneCategorie()); $('#liste-categories .ligne-categorie:last-child .cat-nom').focus(); };
+  $('#liste-categories').onclick = (e) => { if (e.target.closest('.cat-suppr')) e.target.closest('.ligne-categorie').remove(); };
 }
+// Champs de la publication (le prix unique) — vérifie aussi les catégories
 function lireChampsBillet() {
   const oui = !!$('#evt-billet')?.checked;
-  if (!oui) return { billetterie: false, prix_billet: null };
+  if (!oui) return { billetterie: false, billet_par_categorie: false, prix_billet: null };
+  if ($('input[name=mode-billet]:checked')?.value === 'categories') {
+    lireCategories();
+    return { billetterie: true, billet_par_categorie: true, prix_billet: null, devise_billet: 'USD' };
+  }
   const prix = Number($('#evt-prix-billet').value);
   if (!(prix > 0)) throw new Error('Indiquez le prix du billet.');
-  return { billetterie: true, prix_billet: prix, devise_billet: 'USD' };
+  return { billetterie: true, billet_par_categorie: false, prix_billet: prix, devise_billet: 'USD' };
+}
+function lireCategories() {
+  if (!$('#evt-billet')?.checked || $('input[name=mode-billet]:checked')?.value !== 'categories') return [];
+  const cats = $$('#liste-categories .ligne-categorie').map((l, i) => ({ nom: $('.cat-nom', l).value.trim(), prix: Number($('.cat-prix', l).value), ordre: i }))
+    .filter((c) => c.nom || c.prix);
+  if (!cats.length) throw new Error('Ajoutez au moins une catégorie de billet.');
+  const mauvaise = cats.find((c) => !c.nom || !(c.prix > 0));
+  if (mauvaise) throw new Error(`Catégorie « ${mauvaise.nom || 'sans nom'} » : indiquez son nom et son prix.`);
+  const noms = cats.map((c) => c.nom.toLowerCase());
+  if (new Set(noms).size !== noms.length) throw new Error('Deux catégories ont le même nom.');
+  return cats.map((c) => ({ ...c, devise: 'USD' }));
+}
+// Enregistre les catégories d'un événement (remplace les anciennes)
+async function enregistrerCategories(publicationId, cats) {
+  const { error: e1 } = await sb.from('categories_billets').delete().eq('publication_id', publicationId);
+  if (e1) throw e1;
+  if (!cats.length) return;
+  const { error: e2 } = await sb.from('categories_billets').insert(cats.map((c) => ({ ...c, publication_id: publicationId })));
+  if (e2) throw e2;
+}
+const categoriesDe = (p) => (p.billet_par_categorie ? (p.categories_billets || []).slice().sort((x, y) => (x.ordre || 0) - (y.ordre || 0)) : []);
+function prixAffiche(p) {
+  const cats = categoriesDe(p);
+  if (!cats.length) return montant(p.prix_billet, p.devise_billet);
+  const min = Math.min(...cats.map((c) => Number(c.prix)));
+  return cats.length > 1 ? `à partir de ${montant(min, cats[0].devise)}` : montant(min, cats[0].devise);
 }
 function blocBillet(p) {
   const b = etat.mesBillets[p.id];
-  return b
-    ? `<div class="bloc-billet a-billet"><span>🎟 <b>Vous avez votre billet</b>${b.quantite > 1 ? ` (${b.quantite})` : ''}</span><button class="btn secondaire petit" data-billet>Voir mon billet</button></div>`
-    : `<div class="bloc-billet"><span>🎟 Billet : <b>${montant(p.prix_billet, p.devise_billet)}</b></span><button class="btn petit" data-billet>Acheter mon billet</button></div>`;
+  const cats = categoriesDe(p);
+  if (b) return `<div class="bloc-billet a-billet"><span>🎟 <b>Vous avez votre billet</b>${b.quantite > 1 ? ` (${b.quantite})` : ''}${b.categories.length ? ' · ' + esc(b.categories.join(', ')) : ''}</span><button class="btn secondaire petit" data-billet>Voir mon billet</button></div>`;
+  return `<div class="bloc-billet"><div>🎟 Billet : <b>${prixAffiche(p)}</b>${cats.length > 1 ? `<div class="puces-categories">${cats.map((c) => `<span>${esc(c.nom)} · ${montant(c.prix, c.devise)}</span>`).join('')}</div>` : ''}</div><button class="btn petit" data-billet>Acheter mon billet</button></div>`;
 }
 function ouvrirBillet(p) {
   const b = etat.mesBillets[p.id];
@@ -2879,7 +2944,7 @@ function ouvrirBillet(p) {
         <div class="doux petit">MongongoWay · Billet</div>
         <h2 style="margin:6px 0 2px">${esc(p.evt_titre)}</h2>
         <div class="doux petit">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? '<br>📍 ' + esc(p.evt_lieu) : ''}</div>
-        <div class="ticket-codes">${b.codes.map((c) => `<span>${esc(c)}</span>`).join('')}</div>
+        <div class="ticket-codes">${b.details.map((d) => `<div><span>${esc(d.code)}</span>${d.categorie_nom ? `<small>${esc(d.categorie_nom)}${d.quantite > 1 ? ' × ' + d.quantite : ''}</small>` : ''}</div>`).join('')}</div>
         <p class="doux petit" style="margin:0">Présentez ce code à l'entrée.${b.quantite > 1 ? ` ${b.quantite} places.` : ''}</p>
       </div>
       <button class="btn secondaire plein" style="margin-top:12px" data-fermer>Fermer</button>`);
@@ -2887,6 +2952,8 @@ function ouvrirBillet(p) {
   ouvrirModale(`
     <h2 style="margin-top:0">🎟 Acheter mon billet</h2>
     <p class="doux">${esc(p.evt_titre)}<br><span class="petit">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? ' · 📍 ' + esc(p.evt_lieu) : ''}</span></p>
+    ${categoriesDe(p).length ? `<label>Catégorie</label>
+    <div class="choix-categories">${categoriesDe(p).map((c, i) => `<label><input type="radio" name="cat-billet" value="${c.id}" data-prix="${c.prix}" ${i === 0 ? 'checked' : ''}><span><b>${esc(c.nom)}</b><span>${montant(c.prix, c.devise)}</span></span></label>`).join('')}</div>` : ''}
     <label for="nb-billets">Nombre de places</label>
     <input id="nb-billets" type="number" min="1" max="20" value="1">
     <label>Payer avec</label>
@@ -2897,10 +2964,17 @@ function ouvrirBillet(p) {
     </div>
     <label for="tel-paie">Numéro Mobile Money</label>
     <input id="tel-paie" type="tel" inputmode="tel" value="${esc((etat.profil?.telephone || '').replace('+243', '0'))}">
-    <button class="btn plein" id="payer-billet">Payer ${montant(p.prix_billet, p.devise_billet)}</button>
+    <button class="btn plein" id="payer-billet">Payer</button>
     <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
-  const total = () => { const n = Math.max(1, Math.min(20, Number($('#nb-billets').value) || 1)); $('#payer-billet').textContent = 'Payer ' + montant(n * p.prix_billet, p.devise_billet); };
+  const total = () => {
+    const n = Math.max(1, Math.min(20, Number($('#nb-billets').value) || 1));
+    const cat = $('input[name=cat-billet]:checked');
+    const prix = cat ? Number(cat.dataset.prix) : Number(p.prix_billet);
+    $('#payer-billet').textContent = `Payer ${montant(n * prix, p.devise_billet)}${cat ? ' · ' + cat.closest('label').querySelector('b').textContent : ''}`;
+  };
   $('#nb-billets').oninput = total;
+  $$('input[name=cat-billet]').forEach((x) => x.onchange = total);
+  total();
   $('#payer-billet').onclick = () => { toast('Le paiement Mobile Money sera activé très bientôt.'); fermerModale(); };
 }
 
@@ -3137,6 +3211,7 @@ async function vueConversation(autre) {
       <button class="lien-bouton conv-suppr" id="btn-suppr-conv" title="Supprimer la conversation" aria-label="Supprimer la conversation">🗑</button>
     </div>
     <div id="fil-messages" class="fil-messages"><div class="doux petit" style="text-align:center">Chargement…</div></div>
+    <div id="barre-reponse" class="barre-reponse cache"><div class="citation" id="citation-reponse"></div><button type="button" class="lien-bouton" id="annuler-reponse" title="Annuler la réponse">✕</button></div>
     <div id="zone-enreg" class="zone-enreg cache">
       <span class="point-enreg"></span><b id="chrono-enreg">0:00</b><span class="doux petit" style="flex:1">Enregistrement…</span>
       <button type="button" class="btn secondaire petit" id="btn-annuler-enreg" title="Annuler">✕</button>
@@ -3156,7 +3231,15 @@ async function vueConversation(autre) {
   const liensAudio = {};   // chemin → lien temporaire d'écoute
   const { data: eff } = await sb.from('conversations_effacees').select('efface_le').eq('profil_id', uid).eq('autre_id', autre).maybeSingle();
   const effaceLe = eff?.efface_le || null;
+  const resume = (m) => {
+    if (!m) return '<i>Message plus ancien</i>';
+    const qui = m.expediteur_id === uid ? 'Vous' : esc(p.nom_complet || 'Membre');
+    const quoi = m.audio_path ? `🎤 Message vocal${m.audio_duree ? ' · ' + duree(m.audio_duree) : ''}${m.contenu?.trim() ? ' · ' + esc(m.contenu.trim().slice(0, 60)) : ''}`
+      : esc(m.contenu.trim().slice(0, 120)) + (m.contenu.trim().length > 120 ? '…' : '');
+    return `<b>${qui}</b><span>${quoi}</span>`;
+  };
   const bulle = (m) => `<div class="bulle ${m.expediteur_id === uid ? 'moi' : 'lui'}" data-msg="${m.id}">
+      ${m.reponse_a ? `<div class="citation dans-bulle" data-aller="${m.reponse_a}">${resume(messages.find((x) => x.id === m.reponse_a))}</div>` : ''}
       ${m.audio_path ? `<div class="bulle-audio"><span>🎤</span><audio controls controlslist="nodownload noplaybackrate" preload="none" src="${esc(liensAudio[m.audio_path] || '')}"></audio>${m.audio_duree ? `<span class="doux petit">${duree(m.audio_duree)}</span>` : ''}</div>` : ''}
       ${m.contenu?.trim() ? `<div class="bulle-texte">${texteRiche(m.contenu)}</div>` : ''}
       <div class="bulle-heure">${momentPrecis(m.cree_le)}${m.expediteur_id === uid ? (m.lu_le ? ' · Lu' : ' · Envoyé') : ''}</div>
@@ -3194,6 +3277,14 @@ async function vueConversation(autre) {
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width: 900px)').matches) { e.preventDefault(); $('#form-msg').requestSubmit(); } });
   // ---------- Messages audio : enregistrement au micro ou fichier joint ----------
   const prog = $('#prog-msg');
+  let reponseA = null;
+  const choisirReponse = (m) => {
+    reponseA = m ? m.id : null;
+    $('#barre-reponse').classList.toggle('cache', !m);
+    $('#citation-reponse').innerHTML = m ? resume(m) : '';
+    if (m) ta.focus();
+  };
+  $('#annuler-reponse').onclick = () => choisirReponse(null);
   const envoyerAudio = async (blob, dureeSec) => {
     const type0 = (blob.type || 'audio/webm').split(';')[0];
     const typesOk = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/aac': 'aac', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/wav': 'wav', 'audio/x-wav': 'wav' };
@@ -3213,9 +3304,9 @@ async function vueConversation(autre) {
       prog.firstElementChild.style.width = '65%';
       const up = await sb.storage.from('messages-audio').upload(chemin, fichier, { contentType: type });
       if (up.error) throw up.error;
-      const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu: ta.value.trim(), audio_path: chemin, audio_duree: dureeSec || null });
+      const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu: ta.value.trim(), audio_path: chemin, audio_duree: dureeSec || null, reponse_a: reponseA });
       if (e2) { sb.storage.from('messages-audio').remove([chemin]); throw e2; }
-      ta.value = ''; ta.style.height = 'auto';
+      ta.value = ''; ta.style.height = 'auto'; choisirReponse(null);
       prog.firstElementChild.style.width = '100%';
       await charger(true);
     } catch (err) {
@@ -3297,15 +3388,32 @@ async function vueConversation(autre) {
     const contenu = ta.value.trim();
     if (!contenu) return;
     const b = e.submitter || $('#form-msg button'); b.disabled = true;
-    const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu });
+    const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu, reponse_a: reponseA });
     b.disabled = false;
     if (e2) return erreur(e2);
-    ta.value = ''; ta.style.height = 'auto'; ta.focus();
+    ta.value = ''; ta.style.height = 'auto'; choisirReponse(null); ta.focus();
     await charger(true);
   };
   $('#fil-messages').onclick = (e) => {
-    const bl = e.target.closest('.bulle.moi');
+    // Toucher la citation : on remonte au message d'origine
+    const aller = e.target.closest('[data-aller]');
+    if (aller) {
+      const cible = $(`#fil-messages [data-msg="${aller.dataset.aller}"]`);
+      if (cible) { cible.scrollIntoView({ behavior: 'smooth', block: 'center' }); cible.classList.add('cible'); setTimeout(() => cible.classList.remove('cible'), 1600); }
+      else toast('Ce message n\'est plus disponible.');
+      return;
+    }
+    const bl = e.target.closest('.bulle');
     if (!bl || e.target.closest('audio')) return;
+    const m = messages.find((x) => x.id === bl.dataset.msg);
+    if (!m) return;
+    const amoi = m.expediteur_id === uid;
+    ouvrirModale(`<div class="citation" style="margin-bottom:12px">${resume(m)}</div>
+      <button class="btn plein" id="repondre-msg">↩ Répondre${m.audio_path ? ' à ce message vocal' : ''}</button>
+      ${amoi ? '<button class="btn danger plein" style="margin-top:10px" id="suppr-msg">🗑 Supprimer ce message</button>' : ''}
+      <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+    $('#repondre-msg').onclick = () => { fermerModale(); choisirReponse(m); };
+    $('#suppr-msg')?.addEventListener('click', () => {
     ouvrirModale(`<h2 style="margin-top:0">Supprimer ce message ?</h2><p class="doux">Il disparaîtra aussi chez ${esc(p.nom_complet || 'le destinataire')}.</p>
       <button class="btn danger plein" id="ok-suppr-msg">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
     $('#ok-suppr-msg').onclick = async () => {
@@ -3313,8 +3421,10 @@ async function vueConversation(autre) {
       const { error: e3 } = await sb.from('messages').delete().eq('id', bl.dataset.msg);
       if (e3) return erreur(e3);
       if (m?.audio_path) sb.storage.from('messages-audio').remove([m.audio_path]);
+      if (reponseA === m?.id) choisirReponse(null);
       fermerModale(); charger(true);
     };
+    });
   };
 }
 
@@ -3989,11 +4099,13 @@ function modifierPublication(p, apres) {
     if (evt) {
       const date = new Date($('#m-date').value);
       if (isNaN(date)) return toast('Choisissez la date et l\'heure.', true);
-      try { Object.assign(d, { evt_titre: $('#m-titre').value.trim(), evt_date: date.toISOString(), evt_lieu: $('#m-lieu').value.trim() || null, ...lireChampsBillet() }); }
+      try { Object.assign(d, { evt_titre: $('#m-titre').value.trim(), evt_date: date.toISOString(), evt_lieu: $('#m-lieu').value.trim() || null, ...lireChampsBillet() }); d.__cats = lireCategories(); }
       catch (err) { return toast(err.message, true); }
     } else if (!d.texte && !photosDe(p).length) return toast('Le texte ne peut pas être vide.', true);
+    const cats = d.__cats; delete d.__cats;
     const { error } = await sb.from('publications').update(d).eq('id', p.id);
     if (error) return erreur(error);
+    if (evt) { try { await enregistrerCategories(p.id, cats || []); } catch (err) { return erreur(err); } }
     fermerModale();
     toast(!estAdmin() && p.statut === 'publie' ? 'Modifiée. Elle sera de nouveau visible après validation.' : 'Publication modifiée.');
     apres?.();
