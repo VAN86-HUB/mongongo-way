@@ -173,6 +173,7 @@ const routes = {
   soutien: vueSoutien,
   a: vuePageArtiste,
   album: vueAlbum,
+  appel: vueAppel,
   fil: vueFil,
   messages: vueMessages,
   membre: vueMembre,
@@ -221,7 +222,7 @@ window.addEventListener('hashchange', router);
 
 // ---------- À chaque ouverture, l'application commence par l'Accueil ----------
 // Sauf si on l'ouvre par un lien précis (chanson partagée, notification, direct, profil…).
-const LIENS_PRECIS = /^#\/(titre|direct|a|album|membre|messages|notifications|accueil|fil|cv|deposer)\/./;
+const LIENS_PRECIS = /^#\/(titre|direct|appel|a|album|membre|messages|notifications|accueil|fil|cv|deposer)\/./;
 const DEPUIS_NOTIF = /^#\/(notifications|admin)/;
 let ouvertureFraiche = false;
 (function ouvrirSurAccueil() {
@@ -3208,6 +3209,8 @@ async function vueConversation(autre) {
     <div class="conv-entete">
       <a href="#/messages" class="lien-bouton" style="font-size:22px" title="Retour">‹</a>
       <a href="#/membre/${p.id}" class="conv-qui"><div class="avatar petit-avatar">${esc((p.nom_complet || '?').charAt(0).toUpperCase())}</div><b>${esc(p.nom_complet || 'Membre')}</b></a>
+      <button class="lien-bouton conv-appel" id="btn-appel-audio" title="Appel audio" aria-label="Appel audio">📞</button>
+      <button class="lien-bouton conv-appel" id="btn-appel-video" title="Appel vidéo" aria-label="Appel vidéo">🎥</button>
       <button class="lien-bouton conv-suppr" id="btn-suppr-conv" title="Supprimer la conversation" aria-label="Supprimer la conversation">🗑</button>
     </div>
     <div id="fil-messages" class="fil-messages"><div class="doux petit" style="text-align:center">Chargement…</div></div>
@@ -3238,7 +3241,15 @@ async function vueConversation(autre) {
       : esc(m.contenu.trim().slice(0, 120)) + (m.contenu.trim().length > 120 ? '…' : '');
     return `<b>${qui}</b><span>${quoi}</span>`;
   };
-  const bulle = (m) => `<div class="bulle ${m.expediteur_id === uid ? 'moi' : 'lui'}" data-msg="${m.id}">
+  const ligneAppel = (x) => {
+    const sortant = x.appelant_id === uid;
+    const nomType = x.type === 'video' ? 'Appel vidéo' : 'Appel audio';
+    const issue = x.statut === 'termine' ? (x.duree_sec ? duree(x.duree_sec) : 'terminé')
+      : x.statut === 'refuse' ? (sortant ? 'refusé' : 'refusé') : x.statut === 'annule' ? (sortant ? 'annulé' : 'manqué') : (sortant ? 'sans réponse' : 'manqué');
+    const manque = !sortant && x.statut !== 'termine';
+    return `<div class="ligne-appel ${manque ? 'manque' : ''}" data-rappel="${x.type}">${x.type === 'video' ? '🎥' : '📞'} ${sortant ? '↗' : '↙'} ${nomType} · ${issue} · ${momentPrecis(x.cree_le)}${manque ? ' · <u>Rappeler</u>' : ''}</div>`;
+  };
+  const bulle = (m) => m.estAppel ? ligneAppel(m) : `<div class="bulle ${m.expediteur_id === uid ? 'moi' : 'lui'}" data-msg="${m.id}">
       ${m.reponse_a ? `<div class="citation dans-bulle" data-aller="${m.reponse_a}">${resume(messages.find((x) => x.id === m.reponse_a))}</div>` : ''}
       ${m.audio_path ? `<div class="bulle-audio"><span>🎤</span><audio controls controlslist="nodownload noplaybackrate" preload="none" src="${esc(liensAudio[m.audio_path] || '')}"></audio>${m.audio_duree ? `<span class="doux petit">${duree(m.audio_duree)}</span>` : ''}</div>` : ''}
       ${m.contenu?.trim() ? `<div class="bulle-texte">${texteRiche(m.contenu)}</div>` : ''}
@@ -3250,7 +3261,12 @@ async function vueConversation(autre) {
     if (effaceLe) q = q.gt('cree_le', effaceLe);
     const { data, error: e2 } = await q.order('cree_le', { ascending: false }).limit(200);
     if (e2) return erreur(e2);
-    const nouveaux = (data || []).reverse();
+    let qa = sb.from('appels').select('id, appelant_id, appele_id, type, statut, cree_le, duree_sec')
+      .or(`and(appelant_id.eq.${uid},appele_id.eq.${autre}),and(appelant_id.eq.${autre},appele_id.eq.${uid})`);
+    if (effaceLe) qa = qa.gt('cree_le', effaceLe);
+    const { data: appels } = await qa.order('cree_le', { ascending: false }).limit(50);
+    const nouveaux = [...(data || []), ...(appels || []).filter((x) => x.statut !== 'sonne' && x.statut !== 'en_cours').map((x) => ({ ...x, estAppel: true }))]
+      .sort((x, y) => new Date(x.cree_le) - new Date(y.cree_le));
     const aSigner = nouveaux.map((m) => m.audio_path).filter((c) => c && !liensAudio[c]);
     if (aSigner.length) {
       const { data: liens } = await sb.storage.from('messages-audio').createSignedUrls(aSigner, 60 * 60 * 6);
@@ -3269,6 +3285,9 @@ async function vueConversation(autre) {
     if (messages.some((m) => m.destinataire_id === uid && !m.lu_le)) { await sb.rpc('marquer_messages_lus', { autre }); majBadgeMessages(); }
   };
   await charger(true);
+  window.__rafraichirConversation = () => { if ($('#fil-messages')) charger(true); };
+  $('#btn-appel-audio').onclick = () => lancerAppel(autre, p.nom_complet, 'audio');
+  $('#btn-appel-video').onclick = () => lancerAppel(autre, p.nom_complet, 'video');
   clearInterval(minuterieConversation);
   minuterieConversation = setInterval(() => { if (document.visibilityState === 'visible' && $('#fil-messages')) charger(false); }, 8000);
 
@@ -3395,6 +3414,8 @@ async function vueConversation(autre) {
     await charger(true);
   };
   $('#fil-messages').onclick = (e) => {
+    const rappel = e.target.closest('[data-rappel]');
+    if (rappel) return lancerAppel(autre, p.nom_complet, rappel.dataset.rappel === 'video' ? 'video' : 'audio');
     // Toucher la citation : on remonte au message d'origine
     const aller = e.target.closest('[data-aller]');
     if (aller) {
@@ -3426,6 +3447,314 @@ async function vueConversation(autre) {
     };
     });
   };
+}
+
+// =========================================================
+// APPELS AUDIO ET VIDÉO (WebRTC) ENTRE MEMBRES
+// - La voix et l'image passent directement d'un téléphone à l'autre (chiffrées),
+//   ou par le relais Cloudflare quand le réseau mobile l'exige. Rien n'est enregistré.
+// - Supabase sert à faire sonner (table « appels » + temps réel) et à échanger
+//   les informations de connexion (canal « appel-<id> »).
+// =========================================================
+const DELAI_SONNERIE = 45000;
+let appelEnCours = null;
+window.__appelEnCours = () => appelEnCours;   // diagnostic
+let serveursIceCache = null;
+
+async function serveursIce() {
+  if (serveursIceCache && serveursIceCache.expire > Date.now()) return serveursIceCache.liste;
+  let liste = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+  try {
+    const { data } = await sb.functions.invoke('identifiants-appel', { body: {} });
+    if (data?.iceServers?.length) liste = data.iceServers;
+  } catch (_) {}
+  serveursIceCache = { liste, expire: Date.now() + 12 * 3600e3 };
+  return liste;
+}
+
+// ---------- Sonnerie (générée, sans fichier) ----------
+function sonnerie(type = 'entrant') {
+  let ctx = null, arret = false, minut = null;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { return () => {}; }
+  const bip = () => {
+    if (arret) return;
+    const t = ctx.currentTime;
+    const notes = type === 'entrant' ? [[659, 0], [784, 0.18], [988, 0.36]] : [[440, 0], [440, 0.45]];
+    for (const [f, d] of notes) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(type === 'entrant' ? 0.25 : 0.08, t + d + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + (type === 'entrant' ? 0.16 : 0.4));
+      o.connect(g).connect(ctx.destination); o.start(t + d); o.stop(t + d + 0.45);
+    }
+    if (type === 'entrant') try { navigator.vibrate?.([400, 200, 400]); } catch (_) {}
+    minut = setTimeout(bip, type === 'entrant' ? 1600 : 3000);
+  };
+  ctx.resume?.().catch(() => {});
+  bip();
+  return () => { arret = true; clearTimeout(minut); try { navigator.vibrate?.(0); } catch (_) {} try { if (ctx.state !== 'closed') ctx.close().catch(() => {}); } catch (_) {} };
+}
+
+// ---------- Écran d'appel ----------
+function ecranAppel(a) {
+  document.getElementById('ecran-appel')?.remove();
+  const el = document.createElement('div');
+  el.id = 'ecran-appel';
+  el.className = 'ecran-appel ' + (a.type === 'video' ? 'video' : 'audio');
+  el.innerHTML = `
+    <video id="video-distante" autoplay playsinline></video>
+    <audio id="audio-distant" autoplay></audio>
+    <video id="video-locale" autoplay playsinline muted></video>
+    <div class="appel-haut">
+      <div class="appel-avatar">${esc((a.nom || '?').charAt(0).toUpperCase())}</div>
+      <div class="appel-nom">${esc(a.nom || 'Membre')}</div>
+      <div class="appel-etat" id="appel-etat">…</div>
+    </div>
+    <div class="appel-boutons" id="appel-boutons"></div>`;
+  document.body.appendChild(el);
+  document.body.classList.add('en-appel');
+  return el;
+}
+function etatAppel(t) { const e = $('#appel-etat'); if (e) e.textContent = t; }
+function boutonsAppel(html) { const b = $('#appel-boutons'); if (b) b.innerHTML = html; }
+
+async function obtenirMedias(type) {
+  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const video = type === 'video' ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } } : false;
+  try { return await navigator.mediaDevices.getUserMedia({ audio, video }); }
+  catch (e) {
+    if (type === 'video') {   // pas de caméra : on bascule en audio
+      try { const f = await navigator.mediaDevices.getUserMedia({ audio }); toast('Caméra indisponible : appel en audio seulement.'); return f; } catch (_) {}
+    }
+    throw new Error('Micro' + (type === 'video' ? ' ou caméra' : '') + ' refusé : autorisez-les pour MongongoWay dans les réglages du téléphone.');
+  }
+}
+
+// Connexion WebRTC + échange des informations par le canal temps réel de l'appel
+async function preparerConnexion(c) {
+  const pc = new RTCPeerConnection({ iceServers: await serveursIce() });
+  c.pc = pc;
+  c.candidatsEnAttente = [];
+  c.flux.getTracks().forEach((t) => pc.addTrack(t, c.flux));
+  pc.onicecandidate = (e) => { if (e.candidate) c.canal.send({ type: 'broadcast', event: 'ice', payload: { de: c.role, candidat: e.candidate.toJSON() } }); };
+  pc.ontrack = (e) => {
+    const flux = e.streams[0] || new MediaStream([e.track]);
+    if (c.type === 'video') {
+      const v = $('#video-distante'); if (v && v.srcObject !== flux) { v.srcObject = flux; v.play?.().catch(() => {}); }
+      if (e.track.kind === 'video') $('#ecran-appel')?.classList.add('image-distante');
+    }
+    else { const a = $('#audio-distant'); if (a && a.srcObject !== flux) { a.srcObject = flux; a.play?.().catch(() => {}); } }
+  };
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === 'connected') { if (!c.debut) { c.debut = Date.now(); chrono(c); } clearTimeout(c.minuterieReseau); }
+    else if (s === 'disconnected') { etatAppel('Reconnexion…'); c.minuterieReseau = setTimeout(() => { if (pc.connectionState !== 'connected') finAppel('Connexion perdue.'); }, 15000); }
+    else if (s === 'failed') finAppel('Connexion impossible : le réseau bloque l\'appel.');
+  };
+  return pc;
+}
+async function ajouterCandidat(c, cand) {
+  if (!c.pc || !c.pc.remoteDescription) { c.candidatsEnAttente.push(cand); return; }
+  try { await c.pc.addIceCandidate(cand); } catch (_) {}
+}
+async function viderCandidats(c) { for (const x of c.candidatsEnAttente.splice(0)) { try { await c.pc.addIceCandidate(x); } catch (_) {} } }
+
+function ouvrirCanal(c) {
+  return new Promise((ok) => {
+    c.canal = sb.channel('appel-' + c.id, { config: { broadcast: { self: false } } });
+    c.canal
+      .on('broadcast', { event: 'pret' }, async () => {
+        if (c.role !== 'appelant' || c.offreEnvoyee) return;
+        c.offreEnvoyee = true;
+        c.arreterSonnerie?.(); etatAppel('Connexion…');
+        await preparerConnexion(c);
+        const offre = await c.pc.createOffer();
+        await c.pc.setLocalDescription(offre);
+        c.canal.send({ type: 'broadcast', event: 'offre', payload: { sdp: c.pc.localDescription.toJSON() } });
+      })
+      .on('broadcast', { event: 'offre' }, async ({ payload }) => {
+        if (c.role !== 'appele' || !c.pc) return;
+        await c.pc.setRemoteDescription(payload.sdp);
+        await viderCandidats(c);
+        const rep = await c.pc.createAnswer();
+        await c.pc.setLocalDescription(rep);
+        c.canal.send({ type: 'broadcast', event: 'reponse', payload: { sdp: c.pc.localDescription.toJSON() } });
+      })
+      .on('broadcast', { event: 'reponse' }, async ({ payload }) => {
+        if (c.role !== 'appelant' || !c.pc) return;
+        await c.pc.setRemoteDescription(payload.sdp);
+        await viderCandidats(c);
+      })
+      .on('broadcast', { event: 'ice' }, ({ payload }) => { if (payload.de !== c.role) ajouterCandidat(c, payload.candidat); })
+      .on('broadcast', { event: 'fin' }, ({ payload }) => finAppel(payload?.raison || 'Appel terminé.', false))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'appels', filter: `id=eq.${c.id}` }, ({ new: n }) => {
+        if (n.statut === 'refuse' && c.role === 'appelant') finAppel(`${c.nom || 'Le membre'} a refusé l'appel.`, false);
+        else if (n.statut === 'annule' && c.role === 'appele') finAppel('Appel annulé.', false);
+        else if (['termine', 'manque'].includes(n.statut) && !c.fini) finAppel('Appel terminé.', false);
+      })
+      .subscribe((s) => { if (s === 'SUBSCRIBED') ok(); });
+    setTimeout(ok, 6000);
+  });
+}
+
+function chrono(c) {
+  clearInterval(c.minuterieChrono);
+  const maj = () => etatAppel(duree(Math.floor((Date.now() - c.debut) / 1000)));
+  maj(); c.minuterieChrono = setInterval(maj, 1000);
+  boutonsEnCours(c);
+}
+function boutonsEnCours(c) {
+  const video = c.type === 'video';
+  boutonsAppel(`
+    <button class="rond-appel" data-act="micro" title="Couper le micro">🎙</button>
+    ${video ? '<button class="rond-appel" data-act="camera" title="Couper la caméra">📷</button><button class="rond-appel" data-act="tourner" title="Changer de caméra">🔄</button>' : ''}
+    <button class="rond-appel rouge" data-act="raccrocher" title="Raccrocher">✆</button>`);
+  $('#appel-boutons').onclick = async (e) => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'raccrocher') return finAppel('Appel terminé.');
+    if (act === 'micro') { const t = c.flux.getAudioTracks()[0]; if (t) { t.enabled = !t.enabled; b.classList.toggle('coupe', !t.enabled); } }
+    if (act === 'camera') { const t = c.flux.getVideoTracks()[0]; if (t) { t.enabled = !t.enabled; b.classList.toggle('coupe', !t.enabled); } }
+    if (act === 'tourner') {
+      try {
+        c.face = c.face === 'environment' ? 'user' : 'environment';
+        const nf = await navigator.mediaDevices.getUserMedia({ video: { facingMode: c.face, width: { ideal: 640 }, height: { ideal: 480 } } });
+        const nt = nf.getVideoTracks()[0];
+        const ancien = c.flux.getVideoTracks()[0];
+        await c.pc.getSenders().find((s) => s.track?.kind === 'video')?.replaceTrack(nt);
+        if (ancien) { c.flux.removeTrack(ancien); ancien.stop(); }
+        c.flux.addTrack(nt); $('#video-locale').srcObject = c.flux; if (c.flux.getVideoTracks().length) $('#ecran-appel')?.classList.add('image-locale');
+      } catch (_) { toast('Impossible de changer de caméra.', true); }
+    }
+  };
+}
+
+async function finAppel(raison = 'Appel terminé.', prevenir = true) {
+  const c = appelEnCours;
+  if (!c || c.fini) return;
+  c.fini = true;
+  c.arreterSonnerie?.();
+  clearTimeout(c.minuterieSonnerie); clearInterval(c.minuterieChrono); clearTimeout(c.minuterieReseau);
+  const statut = c.debut || c.pc?.connectionState === 'connected' ? 'termine'
+    : c.role === 'appelant' ? (c.expire ? 'manque' : 'annule') : (c.refuse ? 'refuse' : 'manque');
+  if (prevenir) { try { c.canal?.send({ type: 'broadcast', event: 'fin', payload: { raison: c.debut ? 'Appel terminé.' : raison } }); } catch (_) {} }
+  sb.from('appels').update({ statut }).eq('id', c.id).then(() => {});
+  try { c.flux?.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  try { c.pc?.close(); } catch (_) {}
+  try { c.verrou?.release(); } catch (_) {}
+  setTimeout(() => { try { sb.removeChannel(c.canal); } catch (_) {} }, 800);
+  const d = c.debut ? Math.floor((Date.now() - c.debut) / 1000) : 0;
+  etatAppel(d ? `${raison} · ${duree(d)}` : raison);
+  boutonsAppel('');
+  setTimeout(() => {
+    $('#ecran-appel')?.remove(); document.body.classList.remove('en-appel');
+    if (appelEnCours === c) appelEnCours = null;
+    if (location.hash.startsWith('#/messages/') && typeof window.__rafraichirConversation === 'function') window.__rafraichirConversation();
+  }, 1600);
+}
+
+// ---------- Appeler ----------
+async function lancerAppel(autreId, nom, type = 'audio') {
+  if (appelEnCours) return toast('Un appel est déjà en cours.', true);
+  if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) return toast('Les appels ne sont pas possibles sur ce navigateur.', true);
+  const c = { role: 'appelant', autreId, nom, type };
+  appelEnCours = c;
+  ecranAppel(c); etatAppel('Préparation…');
+  boutonsAppel('<button class="rond-appel rouge" data-act="annuler" title="Annuler">✆</button>');
+  $('#appel-boutons').onclick = () => finAppel('Appel annulé.');
+  try {
+    c.flux = await obtenirMedias(type);
+    if (!c.flux.getVideoTracks().length) { c.type = 'audio'; $('#ecran-appel').className = 'ecran-appel audio'; }
+    $('#video-locale').srcObject = c.flux; if (c.flux.getVideoTracks().length) $('#ecran-appel')?.classList.add('image-locale');
+    if (c.fini) return;
+    const { data, error } = await sb.from('appels').insert({ appelant_id: etat.session.user.id, appele_id: autreId, type: c.type }).select('id').single();
+    if (error) throw error;
+    c.id = data.id;
+    try { c.verrou = await navigator.wakeLock?.request('screen'); } catch (_) {}
+    await ouvrirCanal(c);
+    if (c.fini) return;
+    if (!c.offreEnvoyee) { etatAppel(c.type === 'video' ? 'Appel vidéo… ça sonne' : 'Appel… ça sonne'); c.arreterSonnerie = sonnerie('sortant'); }
+    c.minuterieSonnerie = setTimeout(() => { if (!c.offreEnvoyee && !c.fini) { c.expire = true; finAppel('Pas de réponse.'); } }, DELAI_SONNERIE);
+  } catch (e) {
+    erreur(e);
+    finAppel(e?.message || 'Appel impossible.', false);
+  }
+}
+
+// ---------- Recevoir ----------
+async function appelEntrant(a) {
+  if (!a || a.appele_id !== etat.session?.user?.id || a.statut !== 'sonne') return;
+  if (Date.now() - new Date(a.cree_le).getTime() > DELAI_SONNERIE) return;
+  if (appelEnCours) { if (appelEnCours.id !== a.id) sb.from('appels').update({ statut: 'manque' }).eq('id', a.id).then(() => {}); return; }
+  const { data: p } = await sb.from('profils').select('nom_complet').eq('id', a.appelant_id).maybeSingle();
+  const c = { role: 'appele', id: a.id, autreId: a.appelant_id, nom: p?.nom_complet || 'Un membre', type: a.type };
+  appelEnCours = c;
+  ecranAppel(c);
+  etatAppel(c.type === 'video' ? '🎥 Appel vidéo entrant' : '📞 Appel entrant');
+  boutonsAppel(`
+    <button class="rond-appel rouge" data-act="refuser" title="Refuser">✆</button>
+    ${c.type === 'video' ? '<button class="rond-appel vert" data-act="audio" title="Répondre sans caméra">🎙</button>' : ''}
+    <button class="rond-appel vert" data-act="decrocher" title="Décrocher">${c.type === 'video' ? '🎥' : '📞'}</button>`);
+  c.arreterSonnerie = sonnerie('entrant');
+  c.minuterieSonnerie = setTimeout(() => { if (!c.pc && !c.fini) finAppel('Appel manqué.', false); }, Math.max(3000, DELAI_SONNERIE - (Date.now() - new Date(a.cree_le).getTime())));
+  // L'appelant peut annuler pendant que ça sonne
+  c.canal = null;
+  const surveiller = sb.channel('appel-statut-' + a.id)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'appels', filter: `id=eq.${a.id}` }, ({ new: n }) => {
+      if (!c.pc && ['annule', 'manque', 'termine'].includes(n.statut)) finAppel('Appel annulé.', false);
+    }).subscribe();
+  c.surveiller = surveiller;
+  $('#appel-boutons').onclick = async (e) => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'refuser') { c.refuse = true; try { sb.removeChannel(surveiller); } catch (_) {} return finAppel('Appel refusé.', false); }
+    c.arreterSonnerie?.(); clearTimeout(c.minuterieSonnerie);
+    try { sb.removeChannel(surveiller); } catch (_) {}
+    boutonsAppel(''); etatAppel('Connexion…');
+    try {
+      if (b.dataset.act === 'audio') c.type = 'audio_seul';
+      c.flux = await obtenirMedias(b.dataset.act === 'audio' ? 'audio' : c.type);
+      if (c.type === 'audio_seul') c.type = 'video';   // on reçoit quand même l'image de l'autre
+      $('#video-locale').srcObject = c.flux; if (c.flux.getVideoTracks().length) $('#ecran-appel')?.classList.add('image-locale');
+      try { c.verrou = await navigator.wakeLock?.request('screen'); } catch (_) {}
+      const { error } = await sb.from('appels').update({ statut: 'en_cours' }).eq('id', c.id);
+      if (error) throw error;
+      await preparerConnexion(c);
+      await ouvrirCanal(c);
+      c.canal.send({ type: 'broadcast', event: 'pret', payload: {} });
+      // Si le premier signal se perd, on le renvoie
+      c.relance = setInterval(() => { if (c.pc?.remoteDescription || c.fini) return clearInterval(c.relance); c.canal.send({ type: 'broadcast', event: 'pret', payload: {} }); }, 2000);
+      setTimeout(() => clearInterval(c.relance), 20000);
+    } catch (err) { erreur(err); finAppel(err?.message || 'Appel impossible.'); }
+  };
+}
+
+let canalAppelsEntrants = null;
+async function ecouterAppelsEntrants() {
+  const uid = etat.session?.user?.id;
+  if (!uid || canalAppelsEntrants?.uid === uid) return;
+  try { if (canalAppelsEntrants) sb.removeChannel(canalAppelsEntrants.canal); } catch (_) {}
+  const canal = sb.channel('appels-entrants-' + uid)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'appels', filter: `appele_id=eq.${uid}` }, ({ new: a }) => appelEntrant(a))
+    .subscribe();
+  canalAppelsEntrants = { uid, canal };
+  verifierAppelEnAttente();
+}
+// À l'ouverture (ou au retour dans l'application) : un appel sonne-t-il encore ?
+async function verifierAppelEnAttente() {
+  const uid = etat.session?.user?.id;
+  if (!uid || appelEnCours) return;
+  const { data } = await sb.from('appels').select('*').eq('appele_id', uid).eq('statut', 'sonne')
+    .gte('cree_le', new Date(Date.now() - DELAI_SONNERIE).toISOString()).order('cree_le', { ascending: false }).limit(1);
+  if (data?.[0]) appelEntrant(data[0]);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') verifierAppelEnAttente(); });
+
+// Lien d'une notification d'appel : #/appel/<id>
+async function vueAppel(id) {
+  const { data: a } = await sb.from('appels').select('*').eq('id', id).maybeSingle();
+  const autre = a ? (a.appelant_id === etat.session.user.id ? a.appele_id : a.appelant_id) : null;
+  location.replace(autre ? `#/messages/${autre}` : '#/messages');
+  if (a) setTimeout(() => appelEntrant(a), 600);
 }
 
 // Page d'un membre : son nom, sa page artiste éventuelle, et le bouton « Envoyer un message »
@@ -4132,13 +4461,13 @@ async function vueNotifications() {
   const { data, error } = await sb.from('notifications').select('*, publications(type)').order('cree_le', { ascending: false }).limit(100);
   if (error) throw error;
   const liste = data || [];
-  const icone = { reponse_commentaire: '↪', commentaire_publication: '💬', direct: '📺' };
+  const icone = { reponse_commentaire: '↪', commentaire_publication: '💬', direct: '📺', appel: '📞' };
   vue.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
       <h1 style="margin:0">Notifications</h1>
       ${liste.length ? '<button class="btn secondaire petit" id="vider-notifs">Tout effacer</button>' : ''}
     </div>
-    <p class="doux petit">Réponses à vos commentaires, commentaires sur vos publications et directs.</p>
+    <p class="doux petit">Réponses à vos commentaires, commentaires sur vos publications, directs et appels.</p>
     <div class="liste liste-simple" id="liste-notifs">${liste.map((n) => `
       <button class="ligne-titre notif ${n.lu_le ? '' : 'non-lu'}" data-notif="${n.id}">
         <span class="notif-ico">${icone[n.genre] || '🔔'}</span>
@@ -4150,6 +4479,7 @@ async function vueNotifications() {
     const b = e.target.closest('[data-notif]'); if (!b) return;
     const n = liste.find((x) => x.id === b.dataset.notif);
     if (n.genre === 'direct' && n.direct_id) { location.hash = `#/direct/${n.direct_id}`; return; }
+    if (n.genre === 'appel' && n.acteur_id) { location.hash = `#/messages/${n.acteur_id}`; return; }
     if (n.publication_id) {
       try { sessionStorage.setItem('mw-cible', n.publication_id); } catch (_) {}
       location.hash = n.publications?.type === 'evenement' ? '#/accueil/evenements' : '#/accueil/actualites';
@@ -4530,6 +4860,7 @@ sb.auth.onAuthStateChange((evenement, session) => {
         $('#lecteur').classList.add('cache');
       }
       await router();
+      if (session) ecouterAppelsEntrants();
       if (session && ouvertureFraiche) { ouvertureFraiche = false; setTimeout(rappelEvenements, 1500); }
     }, 0);
   }

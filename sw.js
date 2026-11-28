@@ -1,5 +1,5 @@
 // Service worker MongongoWay : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v40';
+const VERSION = 'mongongo-v41';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './fond.jpg'
@@ -57,7 +57,7 @@ self.addEventListener('push', (e) => {
   e.waitUntil(self.registration.showNotification(d.titre || 'MongongoWay', {
     body: d.corps || 'Une demande attend votre validation.',
     icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || 'mongongo', renotify: true,
-    vibrate: [200, 100, 200], requireInteraction: d.tag === 'demandes-admin' || d.tag === 'direct', data: { lien: d.lien || '#/admin' }
+    vibrate: d.tag === 'appel' ? [600, 300, 600, 300, 600, 300, 600] : [200, 100, 200], requireInteraction: d.tag === 'demandes-admin' || d.tag === 'direct' || d.tag === 'appel', data: { lien: d.lien || '#/admin' }
   }));
 });
 self.addEventListener('notificationclick', (e) => {

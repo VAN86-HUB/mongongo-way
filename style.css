@@ -718,3 +718,26 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
 .choix-categories label > span span { color: var(--or); font-weight: 700; }
 .ticket-codes > div { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .ticket-codes small { font-weight: 700; color: var(--or); }
+
+/* v41 : appels audio et vidéo */
+.conv-appel { font-size: 18px; padding: 6px 8px; }
+body.en-appel { overflow: hidden; }
+.ecran-appel { position: fixed; inset: 0; z-index: 9999; background: radial-gradient(circle at 50% 30%, #3a2c63, #120e1f 70%); color: #f3eefc; display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: calc(env(safe-area-inset-top) + 40px) 20px calc(env(safe-area-inset-bottom) + 34px); }
+.ecran-appel #video-distante { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; display: none; }
+.ecran-appel.video.image-distante #video-distante { display: block; }
+.ecran-appel #audio-distant { display: none; }
+.ecran-appel #video-locale { position: absolute; right: 14px; top: calc(env(safe-area-inset-top) + 14px); width: 104px; height: 140px; object-fit: cover; border-radius: 14px; border: 2px solid rgba(255,255,255,.6); background: #000; z-index: 2; display: none; transform: scaleX(-1); }
+.ecran-appel.image-locale #video-locale { display: block; }
+.appel-haut { position: relative; z-index: 1; text-align: center; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
+.appel-avatar { width: 110px; height: 110px; margin: 30px auto 14px; border-radius: 50%; display: grid; place-items: center; font-size: 46px; font-weight: 800; color: #1a1426; background: linear-gradient(135deg, #e8b04b, #b77a1c); box-shadow: 0 0 0 10px rgba(232,176,75,.15), 0 0 0 22px rgba(232,176,75,.07); }
+.ecran-appel.image-distante .appel-avatar { width: 56px; height: 56px; font-size: 24px; margin: 0 auto 8px; box-shadow: none; }
+.appel-nom { font-size: 24px; font-weight: 700; }
+.appel-etat { margin-top: 6px; font-size: 15px; opacity: .85; }
+.appel-boutons { position: relative; z-index: 1; display: flex; gap: 22px; justify-content: center; }
+.rond-appel { width: 64px; height: 64px; border-radius: 50%; border: 0; font-size: 26px; cursor: pointer; background: rgba(255,255,255,.18); color: #fff; backdrop-filter: blur(6px); }
+.rond-appel.rouge { background: #e05252; transform: rotate(135deg); }
+.rond-appel.vert { background: #2fae6f; animation: pulse-appel 1.2s infinite; }
+.rond-appel.coupe { background: #fff; color: #120e1f; opacity: .9; }
+@keyframes pulse-appel { 50% { box-shadow: 0 0 0 12px rgba(47,174,111,.25); } }
+.ligne-appel { align-self: center; text-align: center; font-size: 12.5px; color: var(--doux, #a69fbd); padding: 6px 12px; border-radius: 99px; background: var(--carte, rgba(255,255,255,.05)); margin: 4px auto; cursor: pointer; }
+.ligne-appel.manque { color: #e05252; }
