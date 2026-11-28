@@ -663,3 +663,32 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
 .rappel-ligne:hover { border-color: var(--or); }
 .rappel-quand { align-self: flex-start; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; background: var(--or); color: #1a1426; }
 .zone-enreg .btn { white-space: nowrap; }
+
+/* v38 : albums, artistes, billetterie */
+.grille-albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.carte-album { display: flex; flex-direction: column; gap: 3px; padding: 10px; border-radius: 16px; background: var(--carte, rgba(255,255,255,.04)); border: 1px solid var(--bord, rgba(255,255,255,.08)); color: var(--texte); text-decoration: none; min-width: 0; }
+.carte-album:hover { border-color: var(--or); }
+.carte-album b { margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.carte-album .petit { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pochette.pochette-album { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; }
+.pochette.pochette-album.rond, .avatar-artiste { border-radius: 50%; }
+.carte-artiste { text-align: center; align-items: center; }
+.avatar-artiste { width: 100%; aspect-ratio: 1; display: grid; place-items: center; font-size: 46px; font-weight: 800; color: #1a1426; background: linear-gradient(135deg, var(--or), #b77a1c); }
+.tete-album { display: flex; gap: 16px; align-items: flex-end; margin: 6px 0 12px; flex-wrap: wrap; }
+.pochette.pochette-grande { width: 160px; height: 160px; border-radius: 16px; flex: none; box-shadow: 0 10px 28px rgba(0,0,0,.35); }
+.num-piste { flex: none; width: 22px; text-align: center; color: var(--doux, #a69fbd); font-weight: 700; font-size: 14px; }
+.case-billet { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 0; padding: 12px; border-radius: 14px; border: 1px solid var(--bord, rgba(255,255,255,.12)); color: var(--texte); cursor: pointer; }
+.case-billet input { width: auto; margin-top: 4px; accent-color: var(--or); }
+.case-billet:has(input:checked) { border-color: var(--or); }
+.bloc-billet { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--or); }
+.bloc-billet.a-billet { border-style: solid; border-color: #2fae6f; }
+.ticket { text-align: center; padding: 18px; border-radius: 18px; border: 2px dashed var(--or); }
+.ticket-codes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 14px 0 10px; }
+.ticket-codes span { font: 800 22px/1 ui-monospace, monospace; letter-spacing: 3px; padding: 10px 14px; border-radius: 10px; background: var(--or); color: #1a1426; }
+.rappel-msg { display: block; margin-top: 6px; font-size: 13px; }
+.rappel-msg.ok { color: #2fae6f; }
+.rappel-achat { align-self: flex-start; margin-top: 8px; }
+@media (max-width: 520px) {
+  .onglets.onglets-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; border-radius: 22px; overflow: visible; }
+  .onglets.onglets-4 button { white-space: nowrap; }
+}

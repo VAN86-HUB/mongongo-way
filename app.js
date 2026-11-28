@@ -172,6 +172,7 @@ const routes = {
   achats: vueAchats,
   soutien: vueSoutien,
   a: vuePageArtiste,
+  album: vueAlbum,
   fil: vueFil,
   messages: vueMessages,
   membre: vueMembre,
@@ -182,13 +183,14 @@ const routes = {
 };
 
 async function router() {
-  const [nom, param] = (location.hash.replace(/^#\//, '') || 'accueil').split('/');
+  const [nom, ...reste] = (location.hash.replace(/^#\//, '') || 'accueil').split('/');
+  const param = nom === 'album' ? reste.join('/') : reste[0];
   const connecte = !!etat.session;
   $('#nav').classList.toggle('cache', !connecte);
   $('#btn-messages')?.classList.toggle('cache', !connecte);
   if (!connecte && nom !== 'connexion') { location.hash = '#/connexion'; return; }
   if (connecte && nom === 'connexion') { location.hash = '#/accueil'; return; }
-  const SECTION_MUSIQUE = ['musique', 'artiste', 'deposer', 'titre', 'a'];
+  const SECTION_MUSIQUE = ['musique', 'artiste', 'deposer', 'titre', 'a', 'album'];
   $$('#nav a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom
     || (['fil', 'direct', 'directs'].includes(nom) && a.dataset.route === 'accueil')
     || (SECTION_MUSIQUE.includes(nom) && a.dataset.route === 'musique')
@@ -219,7 +221,7 @@ window.addEventListener('hashchange', router);
 
 // ---------- À chaque ouverture, l'application commence par l'Accueil ----------
 // Sauf si on l'ouvre par un lien précis (chanson partagée, notification, direct, profil…).
-const LIENS_PRECIS = /^#\/(titre|direct|a|membre|messages|notifications|accueil|fil|cv|deposer)\/./;
+const LIENS_PRECIS = /^#\/(titre|direct|a|album|membre|messages|notifications|accueil|fil|cv|deposer)\/./;
 const DEPUIS_NOTIF = /^#\/(notifications|admin)/;
 let ouvertureFraiche = false;
 (function ouvrirSurAccueil() {
@@ -251,14 +253,23 @@ async function rappelEvenements() {
   fin.setHours(23, 59, 59, 999);
   let data = null, error = null;
   try {
-    ({ data, error } = await sb.from('publications').select('id, evt_titre, evt_date, evt_lieu')
+    ({ data, error } = await sb.from('publications').select('id, evt_titre, evt_date, evt_lieu, billetterie, prix_billet, devise_billet')
       .eq('type', 'evenement').eq('statut', 'publie')
       .gte('evt_date', new Date(Date.now() - 3 * 3600e3).toISOString()).lte('evt_date', fin.toISOString())
       .order('evt_date', { ascending: true }).limit(10));
   } catch (e) { console.warn(e); return; }
   if (error || !data?.length) return;
   const proches = data.filter((p) => new Date(p.evt_date) >= debutDuJour() && new Date(p.evt_date) <= fin);
-  if (!proches.length || !$('#modale').classList.contains('cache')) return;
+  if (!proches.length) return;
+  await chargerMesBillets();
+  if (!$('#modale').classList.contains('cache')) return;
+  // Message adapté : billet déjà acheté, billet à acheter, ou simple rappel de préparation
+  const message = (p) => {
+    if (!p.billetterie) return '<span class="rappel-msg">🙏 Préparez-vous pour y participer.</span>';
+    const b = etat.mesBillets[p.id];
+    if (b) return `<span class="rappel-msg ok">✓ Vous avez votre billet${b.quantite > 1 ? ` (${b.quantite} places)` : ''}. Préparez-vous, et gardez votre code : <b>${esc(b.codes[0])}</b></span>`;
+    return `<span class="rappel-msg">🎟 Vous n'avez pas encore de billet (${montant(p.prix_billet, p.devise_billet)}).</span><span class="btn petit rappel-achat" data-acheter="${p.id}">Acheter mon billet</span>`;
+  };
   ouvrirModale(`
     <div class="rappel-evt">
       <div class="rappel-icone">📅</div>
@@ -269,10 +280,13 @@ async function rappelEvenements() {
           <span class="rappel-quand">${esc(compteARebours(p.evt_date))}</span>
           <b>${esc(p.evt_titre || 'Événement')}</b>
           <span class="doux petit">${esc(dateEvenement(p.evt_date))}${p.evt_lieu ? ' · 📍 ' + esc(p.evt_lieu) : ''}</span>
+          ${message(p)}
         </button>`).join('')}
       <button class="btn secondaire plein" style="margin-top:6px" data-fermer>Fermer</button>
     </div>`);
-  $$('#modale [data-evt]').forEach((b) => b.onclick = () => {
+  $$('#modale [data-evt]').forEach((b) => b.onclick = (e) => {
+    const achat = e.target.closest('[data-acheter]');
+    if (achat) { const p = proches.find((x) => x.id === achat.dataset.acheter); fermerModale(); return ouvrirBillet(p); }
     try { sessionStorage.setItem('mw-cible', b.dataset.evt); } catch (_) {}
     fermerModale();
     if (location.hash === '#/accueil/evenements') router(); else location.hash = '#/accueil/evenements';
@@ -375,10 +389,10 @@ async function vueAccueil() {
   chargement();
   const { data: titres, error } = await sb
     .from('titres')
-    .select('id, titre, genre, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, nb_auditeurs, prix_telechargement, prix_video, devise, publie_le, artistes(nom_scene)')
+    .select('id, titre, genre, album, piste, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, nb_auditeurs, prix_telechargement, prix_video, devise, publie_le, artistes(id, nom_scene, type)')
     .eq('statut', 'publie')
     .order('publie_le', { ascending: false })
-    .limit(200);
+    .limit(1000);
   if (error) throw error;
   etat.catalogue = titres;
 
@@ -389,13 +403,22 @@ async function vueAccueil() {
       <p>${estAbonne() ? 'Vous êtes abonné : écoute dans l\'ordre, clips à la suite et téléchargements gratuits.' : 'Écoute gratuite en lecture aléatoire. <a href="#/abonnement" style="color:#fff;text-decoration:underline">Abonnez-vous</a> pour écouter dans l\'ordre et télécharger gratuitement.'}</p>
     </div>
     <div class="recherche"><input id="cherche" type="search" placeholder="Rechercher un titre, un artiste, un genre…"></div>
-    <div class="onglets" style="margin:6px 0 14px">
+    <div class="onglets onglets-4" style="margin:6px 0 14px">
       <button data-tri="nouveautes" class="${(vueAccueil.tri || 'nouveautes') === 'nouveautes' ? 'actif' : ''}">Nouveautés</button>
       <button data-tri="ecoutes" class="${vueAccueil.tri === 'ecoutes' ? 'actif' : ''}">Les plus écoutés</button>
+      <button data-tri="albums" class="${vueAccueil.tri === 'albums' ? 'actif' : ''}">Albums</button>
+      <button data-tri="artistes" class="${vueAccueil.tri === 'artistes' ? 'actif' : ''}">Artistes</button>
     </div>
     <div id="liste" class="liste"></div>`;
   const parAuditeurs = (a, b) => (b.nb_auditeurs || 0) - (a.nb_auditeurs || 0) || (b.nb_ecoutes || 0) - (a.nb_ecoutes || 0);
-  const dessinerListe = (liste0) => {
+  const dessinerListe = (liste0, q = '') => {
+    if (vueAccueil.tri === 'albums' || vueAccueil.tri === 'artistes') {
+      const zone = $('#liste');
+      zone.className = 'grille-albums';
+      zone.innerHTML = vueAccueil.tri === 'albums' ? grilleAlbums(titres, q) : grilleArtistes(titres, q);
+      return;
+    }
+    $('#liste').className = 'liste';
     const classement = vueAccueil.tri === 'ecoutes';
     const liste = classement ? [...liste0].sort(parAuditeurs) : liste0;
     etat.file = liste;
@@ -412,7 +435,108 @@ async function vueAccueil() {
   $('#cherche').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     dessinerListe(!q ? titres : titres.filter((t) =>
-      [t.titre, t.genre, t.artistes?.nom_scene].some((v) => (v || '').toLowerCase().includes(q))));
+      [t.titre, t.genre, t.album, t.artistes?.nom_scene].some((v) => (v || '').toLowerCase().includes(q))), q);
+  };
+  if (vueAccueil.tri === 'albums' || vueAccueil.tri === 'artistes') dessinerListe(titres);
+}
+
+// ---------- Albums et artistes ----------
+function regrouperAlbums(titres) {
+  const g = new Map();
+  for (const t of titres) {
+    if (!t.album || !t.artistes?.id) continue;
+    const cle = t.artistes.id + '|' + t.album;
+    if (!g.has(cle)) g.set(cle, { cle, nom: t.album, artiste: t.artistes, titres: [] });
+    g.get(cle).titres.push(t);
+  }
+  const albums = [...g.values()];
+  albums.forEach((a) => {
+    a.titres.sort((x, y) => (x.piste || 999) - (y.piste || 999) || new Date(x.publie_le) - new Date(y.publie_le));
+    a.pochette = a.titres.find((t) => t.pochette_path)?.pochette_path || null;
+    a.duree = a.titres.reduce((s, t) => s + (t.duree_sec || 0), 0);
+    a.recent = a.titres.reduce((m, t) => (t.publie_le > m ? t.publie_le : m), '');
+  });
+  return albums.sort((x, y) => String(y.recent).localeCompare(String(x.recent)));
+}
+const lienAlbum = (artisteId, nom) => `#/album/${artisteId}/${encodeURIComponent(nom)}`;
+const dureeLongue = (s) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.round((s % 3600) / 60)).padStart(2, '0')}` : `${Math.round(s / 60)} min`);
+function grilleAlbums(titres, q = '') {
+  const albums = regrouperAlbums(titres).filter((a) => !q || [a.nom, a.artiste.nom_scene].some((v) => (v || '').toLowerCase().includes(q)));
+  if (!albums.length) return `<div class="vide" style="grid-column:1/-1"><span class="grand">💿</span>${q ? 'Aucun album trouvé.' : 'Aucun album pour le moment.'}</div>`;
+  return albums.map((a) => `
+    <a class="carte-album" href="${lienAlbum(a.artiste.id, a.nom)}">
+      ${imgPochette(a.pochette, 'pochette pochette-album')}
+      <b>${esc(a.nom)}</b>
+      <span class="doux petit">${esc(a.artiste.nom_scene)}</span>
+      <span class="doux petit">${a.titres.length} titre${a.titres.length > 1 ? 's' : ''}${a.duree ? ' · ' + dureeLongue(a.duree) : ''}</span>
+    </a>`).join('');
+}
+function grilleArtistes(titres, q = '') {
+  const m = new Map();
+  for (const t of titres) {
+    const a = t.artistes; if (!a?.id) continue;
+    if (!m.has(a.id)) m.set(a.id, { ...a, titres: 0, albums: new Set(), pochette: null, auditeurs: 0 });
+    const x = m.get(a.id);
+    x.titres++; if (t.album) x.albums.add(t.album);
+    if (!x.pochette && t.pochette_path) x.pochette = t.pochette_path;
+    x.auditeurs += t.nb_auditeurs || 0;
+  }
+  const liste = [...m.values()].filter((a) => !q || (a.nom_scene || '').toLowerCase().includes(q)).sort((x, y) => x.nom_scene.localeCompare(y.nom_scene, 'fr'));
+  if (!liste.length) return `<div class="vide" style="grid-column:1/-1"><span class="grand">🎤</span>${q ? 'Aucun artiste trouvé.' : 'Aucun artiste pour le moment.'}</div>`;
+  return liste.map((a) => `
+    <a class="carte-album carte-artiste" href="#/a/${a.id}">
+      ${a.pochette ? imgPochette(a.pochette, 'pochette pochette-album rond') : `<div class="avatar-artiste">${esc(a.nom_scene.charAt(0).toUpperCase())}</div>`}
+      <b>${esc(a.nom_scene)}</b>
+      <span class="doux petit">${a.titres} titre${a.titres > 1 ? 's' : ''}${a.albums.size ? ` · ${a.albums.size} album${a.albums.size > 1 ? 's' : ''}` : ''}</span>
+    </a>`).join('');
+}
+
+// Page d'un album : pochette, informations et pistes dans l'ordre
+async function vueAlbum(param) {
+  chargement();
+  const [artisteId, ...reste] = String(param || '').split('/');
+  const nom = decodeURIComponent(reste.join('/'));
+  const { data: titres, error } = await sb.from('titres')
+    .select('id, titre, genre, album, piste, pochette_path, audio_path, video_path, duree_sec, nb_ecoutes, nb_auditeurs, publie_le, artistes(id, nom_scene, type)')
+    .eq('artiste_id', artisteId).eq('album', nom).eq('statut', 'publie');
+  if (error) throw error;
+  const a = regrouperAlbums(titres || [])[0];
+  if (!a) { vue.innerHTML = '<div class="vide"><span class="grand">💿</span>Cet album n\'existe pas ou n\'a pas encore de titre publié.</div>'; return; }
+  const abo = estAbonne();
+  const ecoutes = a.titres.reduce((s, t) => s + (t.nb_ecoutes || 0), 0);
+  vue.innerHTML = `
+    <div class="tete-album">
+      ${imgPochette(a.pochette, 'pochette pochette-grande')}
+      <div>
+        <div class="doux petit">ALBUM</div>
+        <h1 style="margin:2px 0 4px">${esc(a.nom)}</h1>
+        <a href="#/a/${a.artiste.id}" style="color:var(--or);font-weight:600">${esc(a.artiste.nom_scene)}</a>
+        <div class="doux petit" style="margin-top:4px">${a.titres.length} titre${a.titres.length > 1 ? 's' : ''}${a.duree ? ' · ' + dureeLongue(a.duree) : ''} · ${ecoutes.toLocaleString('fr-FR')} lecture${ecoutes > 1 ? 's' : ''}</div>
+      </div>
+    </div>
+    <div class="actions" style="justify-content:flex-start">
+      <button class="btn" id="album-tout">▶ Écouter l'album${abo ? '' : ' 🔒'}</button>
+      ${a.titres.some((t) => t.video_path) ? `<button class="btn secondaire" id="album-clips">▶ Clips à la suite${abo ? '' : ' 🔒'}</button>` : ''}
+      <button class="btn secondaire" id="album-partager">↗ Partager</button>
+    </div>
+    ${!abo ? '<p class="doux petit">Sans abonnement, chaque titre s\'écoute gratuitement, puis la lecture continue au hasard. <a href="#/abonnement">S\'abonner</a> pour écouter l\'album dans l\'ordre.</p>' : ''}
+    <div class="liste" id="liste-album">${a.titres.map((t, i) => ligneTitre(t).replace('<div class="lt-infos">', `<div class="num-piste">${t.piste || i + 1}</div><div class="lt-infos">`)).join('')}</div>`;
+  etat.file = a.titres;
+  brancherLignes($('#liste-album'));
+  $('#liste-album').addEventListener('click', () => { etat.file = a.titres; }, true);
+  $('#album-tout').onclick = () => {
+    if (!abo) { location.hash = '#/abonnement'; return toast('Écouter un album dans l\'ordre est réservé aux abonnés.'); }
+    etat.file = a.titres; jouer(a.titres[0]);
+  };
+  $('#album-clips')?.addEventListener('click', () => {
+    if (!abo) { location.hash = '#/abonnement'; return toast('Fonction réservée aux abonnés.'); }
+    const clips = a.titres.filter((t) => t.video_path); if (clips[0]) regarderClips(clips, 0);
+  });
+  $('#album-partager').onclick = async () => {
+    const lien = `${location.origin}${location.pathname}${lienAlbum(a.artiste.id, a.nom)}`;
+    const texte = `Écoutez l'album « ${a.nom} » de ${a.artiste.nom_scene} sur MongongoWay`;
+    try { if (navigator.share) return await navigator.share({ title: a.nom, text: texte, url: lien }); } catch (e) { if (e?.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(`${texte} : ${lien}`); toast('Lien de l\'album copié.'); } catch (_) { toast(lien); }
   };
 }
 
@@ -2494,7 +2618,7 @@ async function vueFil(onglet = 'actualites') {
   chargement();
   const uid = etat.session.user.id;
   const type = onglet === 'evenements' ? 'evenement' : 'message';
-  const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }, { data: enCoursDirect }] = await Promise.all([
+  const [{ data: pubs, error }, { data: mesJaimes }, { data: nouveautes }, , { data: enCoursDirect }] = await Promise.all([
     (type === 'evenement'
       // Un événement disparaît à minuit, juste après sa date (il reste visible toute la journée de l'événement)
       ? sb.from('publications').select('*, profils!auteur_id(nom_complet)').eq('type', type).gte('evt_date', debutDuJour().toISOString())
@@ -2503,6 +2627,7 @@ async function vueFil(onglet = 'actualites') {
       .order(type === 'evenement' ? 'evt_date' : 'cree_le', { ascending: type === 'evenement' }).limit(200),
     sb.from('publication_jaimes').select('publication_id').eq('profil_id', uid),
     sb.rpc('nouveautes_fil'),
+    chargerMesBillets(),
     sb.from('directs').select('id').eq('statut', 'en_direct').limit(1)
   ]);
   const directEnCours = !!enCoursDirect?.length;
@@ -2552,6 +2677,7 @@ async function vueFil(onglet = 'actualites') {
         <div><label for="evt-date">Date et heure</label><input id="evt-date" type="datetime-local" required></div>
         <div><label for="evt-lieu">Lieu</label><input id="evt-lieu" maxlength="200" placeholder="Ex. Église Theway, Kinshasa"></div>
       </div>
+      ${champsBillet()}
       <label for="evt-texte">Description</label><textarea id="evt-texte" maxlength="3000" placeholder="Programme, artistes, entrée…"></textarea>
       <label>Affiche et photos (facultatif, ${MAX_PHOTOS} max.)</label>
       <label class="lien-photo" style="display:inline-block;margin:0">📷 Choisir des photos<input type="file" id="evt-image" accept="image/*" multiple class="cache"></label>
@@ -2617,16 +2743,19 @@ async function vueFil(onglet = 'actualites') {
     } catch (err) { erreur(err); b.disabled = false; b.textContent = libelle; }
   });
   $('#btn-annoncer')?.addEventListener('click', () => { $('#form-evt').classList.toggle('cache'); });
+  brancherChampsBillet();
   $('#form-evt')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const b = e.submitter, libelle = b.textContent; b.disabled = true;
     try {
       const d = new Date($('#evt-date').value);
       if (isNaN(d)) throw new Error('Choisissez la date et l\'heure.');
+      lireChampsBillet();   // vérifie le prix si les billets sont en ligne
       const images = await envoyerImages(photosEvt.fichiers(), b);
       const { error: e2 } = await sb.from('publications').insert({
         auteur_id: uid, type: 'evenement', evt_titre: $('#evt-titre').value.trim(), evt_date: d.toISOString(),
-        evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, images, image_path: images[0] || null
+        evt_lieu: $('#evt-lieu').value.trim() || null, texte: $('#evt-texte').value.trim() || null, images, image_path: images[0] || null,
+        ...lireChampsBillet()
       });
       if (e2) { if (images.length) sb.storage.from('publications').remove(images); throw e2; }
       apresEnvoi(); vueFil('evenements');
@@ -2638,6 +2767,7 @@ async function vueFil(onglet = 'actualites') {
     const carte = e.target.closest('[data-pub]');
     if (!carte) return;
     const id = carte.dataset.pub;
+    if (e.target.closest('[data-billet]')) { const p = (pubs || []).find((x) => x.id === id); if (p) ouvrirBillet(p); return; }
     const p = liste.find((x) => x.id === id);
     const ph = e.target.closest('[data-photo]');
     if (ph) return visionneuse(photosDe(p), Number(ph.dataset.photo));
@@ -2702,6 +2832,78 @@ function cartePublication(p, aimes) {
     ${piedReactions(p, aimes)}
   </article>`;
 }
+// =========================================================
+// BILLETTERIE DES ÉVÉNEMENTS
+// =========================================================
+etat.mesBillets = {};
+async function chargerMesBillets() {
+  if (!etat.session) return {};
+  try {
+    const { data } = await sb.from('billets').select('publication_id, quantite, code, statut').eq('profil_id', etat.session.user.id).eq('statut', 'paye');
+    const m = {};
+    (data || []).forEach((b) => { const x = m[b.publication_id] ||= { quantite: 0, codes: [] }; x.quantite += b.quantite || 1; x.codes.push(b.code); });
+    etat.mesBillets = m;
+  } catch (_) {}
+  return etat.mesBillets;
+}
+function champsBillet(p = {}) {
+  return `
+    <label class="case-billet"><input type="checkbox" id="evt-billet" ${p.billetterie ? 'checked' : ''}> <span>🎟 <b>Billets en ligne</b><br><span class="doux petit">Les participants achètent leur billet dans MongongoWay</span></span></label>
+    <div id="bloc-prix-billet" class="${p.billetterie ? '' : 'cache'}">
+      <label for="evt-prix-billet">Prix du billet (USD)</label>
+      <input id="evt-prix-billet" type="number" min="0.5" step="0.5" value="${p.prix_billet ?? ''}" placeholder="Ex. 5">
+    </div>`;
+}
+function brancherChampsBillet() {
+  const c = $('#evt-billet');
+  if (c) c.onchange = () => { $('#bloc-prix-billet').classList.toggle('cache', !c.checked); if (c.checked) $('#evt-prix-billet').focus(); };
+}
+function lireChampsBillet() {
+  const oui = !!$('#evt-billet')?.checked;
+  if (!oui) return { billetterie: false, prix_billet: null };
+  const prix = Number($('#evt-prix-billet').value);
+  if (!(prix > 0)) throw new Error('Indiquez le prix du billet.');
+  return { billetterie: true, prix_billet: prix, devise_billet: 'USD' };
+}
+function blocBillet(p) {
+  const b = etat.mesBillets[p.id];
+  return b
+    ? `<div class="bloc-billet a-billet"><span>🎟 <b>Vous avez votre billet</b>${b.quantite > 1 ? ` (${b.quantite})` : ''}</span><button class="btn secondaire petit" data-billet>Voir mon billet</button></div>`
+    : `<div class="bloc-billet"><span>🎟 Billet : <b>${montant(p.prix_billet, p.devise_billet)}</b></span><button class="btn petit" data-billet>Acheter mon billet</button></div>`;
+}
+function ouvrirBillet(p) {
+  const b = etat.mesBillets[p.id];
+  if (b) {
+    return ouvrirModale(`
+      <div class="ticket">
+        <div class="doux petit">MongongoWay · Billet</div>
+        <h2 style="margin:6px 0 2px">${esc(p.evt_titre)}</h2>
+        <div class="doux petit">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? '<br>📍 ' + esc(p.evt_lieu) : ''}</div>
+        <div class="ticket-codes">${b.codes.map((c) => `<span>${esc(c)}</span>`).join('')}</div>
+        <p class="doux petit" style="margin:0">Présentez ce code à l'entrée.${b.quantite > 1 ? ` ${b.quantite} places.` : ''}</p>
+      </div>
+      <button class="btn secondaire plein" style="margin-top:12px" data-fermer>Fermer</button>`);
+  }
+  ouvrirModale(`
+    <h2 style="margin-top:0">🎟 Acheter mon billet</h2>
+    <p class="doux">${esc(p.evt_titre)}<br><span class="petit">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? ' · 📍 ' + esc(p.evt_lieu) : ''}</span></p>
+    <label for="nb-billets">Nombre de places</label>
+    <input id="nb-billets" type="number" min="1" max="20" value="1">
+    <label>Payer avec</label>
+    <div class="operateurs">
+      <label><input type="radio" name="op" value="mpesa" checked><span>M-Pesa</span></label>
+      <label><input type="radio" name="op" value="orange_money"><span>Orange Money</span></label>
+      <label><input type="radio" name="op" value="airtel_money"><span>Airtel Money</span></label>
+    </div>
+    <label for="tel-paie">Numéro Mobile Money</label>
+    <input id="tel-paie" type="tel" inputmode="tel" value="${esc((etat.profil?.telephone || '').replace('+243', '0'))}">
+    <button class="btn plein" id="payer-billet">Payer ${montant(p.prix_billet, p.devise_billet)}</button>
+    <button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
+  const total = () => { const n = Math.max(1, Math.min(20, Number($('#nb-billets').value) || 1)); $('#payer-billet').textContent = 'Payer ' + montant(n * p.prix_billet, p.devise_billet); };
+  $('#nb-billets').oninput = total;
+  $('#payer-billet').onclick = () => { toast('Le paiement Mobile Money sera activé très bientôt.'); fermerModale(); };
+}
+
 function carteEvenement(p, aimes, passe = false) {
   const d = new Date(p.evt_date);
   return `<article class="carte pub evenement ${passe ? 'passe' : ''}" data-pub="${p.id}">
@@ -2715,6 +2917,7 @@ function carteEvenement(p, aimes, passe = false) {
         <div class="doux petit" style="margin-top:4px">📅 ${dateEvenement(p.evt_date)}${p.evt_lieu ? `<br>📍 ${esc(p.evt_lieu)}` : ''}</div>
       </div>
     </div>
+    ${p.billetterie && !passe ? blocBillet(p) : ''}
     ${p.texte ? `<p class="pub-texte">${texteRiche(p.texte)}</p>` : ''}
     <div class="doux petit" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><span>Annoncé par <a href="#/membre/${p.auteur_id}">${esc(p.profils?.nom_complet || 'un membre')}</a>${p.modifie_le ? ' · modifié' : ''}</span><span>${boutonModifPub(p)}${boutonSupprPub(p)}</span></div>
     ${badgeStatutPub(p)}
@@ -3033,11 +3236,16 @@ async function vueConversation(autre) {
   $('#btn-micro').onclick = async () => {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('Enregistrement impossible sur ce navigateur : joignez un fichier audio avec 📎.', true);
     let flux;
-    try { flux = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    // Son plus net : micro en 48 kHz, réduction du bruit et de l'écho, volume réglé automatiquement
+    try {
+      flux = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 48000, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+        .catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));
+    }
     catch (_) { return toast('Micro refusé : autorisez le micro pour MongongoWay dans les réglages du téléphone.', true); }
     const types = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'];
     const mimeType = types.find((t) => MediaRecorder.isTypeSupported?.(t));
-    const rec = new MediaRecorder(flux, mimeType ? { mimeType, audioBitsPerSecond: 48000 } : undefined);
+    // 128 kb/s (au lieu de 48) : voix claire, et le chant reste fidèle
+    const rec = new MediaRecorder(flux, mimeType ? { mimeType, audioBitsPerSecond: 128000 } : { audioBitsPerSecond: 128000 });
     const morceaux = [];
     const debut = Date.now();
     enreg = { rec, flux, annule: false, chrono: setInterval(() => {
@@ -3769,17 +3977,20 @@ function modifierPublication(p, apres) {
     <form id="f-modif-pub">
       ${evt ? `<label for="m-titre">Titre</label><input id="m-titre" required maxlength="120" value="${esc(p.evt_titre || '')}">
         <label for="m-date">Date et heure</label><input id="m-date" type="datetime-local" required value="${local(p.evt_date)}">
-        <label for="m-lieu">Lieu</label><input id="m-lieu" maxlength="120" value="${esc(p.evt_lieu || '')}">` : ''}
+        <label for="m-lieu">Lieu</label><input id="m-lieu" maxlength="120" value="${esc(p.evt_lieu || '')}">
+        ${champsBillet(p)}` : ''}
       <label for="m-texte">${evt ? 'Description' : 'Texte'}</label><textarea id="m-texte" rows="5" maxlength="3000">${esc(p.texte || '')}</textarea>
       <button class="btn plein" type="submit" style="margin-top:12px">Enregistrer</button>
     </form>`);
+  brancherChampsBillet();
   $('#f-modif-pub').onsubmit = async (e) => {
     e.preventDefault();
     const d = { texte: $('#m-texte').value.trim() || null };
     if (evt) {
       const date = new Date($('#m-date').value);
       if (isNaN(date)) return toast('Choisissez la date et l\'heure.', true);
-      Object.assign(d, { evt_titre: $('#m-titre').value.trim(), evt_date: date.toISOString(), evt_lieu: $('#m-lieu').value.trim() || null });
+      try { Object.assign(d, { evt_titre: $('#m-titre').value.trim(), evt_date: date.toISOString(), evt_lieu: $('#m-lieu').value.trim() || null, ...lireChampsBillet() }); }
+      catch (err) { return toast(err.message, true); }
     } else if (!d.texte && !photosDe(p).length) return toast('Le texte ne peut pas être vide.', true);
     const { error } = await sb.from('publications').update(d).eq('id', p.id);
     if (error) return erreur(error);
