@@ -217,6 +217,64 @@ async function router() {
 }
 window.addEventListener('hashchange', router);
 
+// ---------- À chaque ouverture, l'application commence par l'Accueil ----------
+// Sauf si on l'ouvre par un lien précis (chanson partagée, notification, direct, profil…).
+const LIENS_PRECIS = /^#\/(titre|direct|a|membre|messages|notifications|accueil|fil|cv)\/./;
+const DEPUIS_NOTIF = /^#\/(notifications|admin)/;
+(function ouvrirSurAccueil() {
+  const h = location.hash;
+  // Simple rechargement (mise à jour, « Réessayer ») : on reste sur la même page
+  let recharge = false;
+  try { recharge = performance.getEntriesByType('navigation')[0]?.type === 'reload' || sessionStorage.getItem('mw-ouverte') === '1'; sessionStorage.setItem('mw-ouverte', '1'); } catch (_) {}
+  if (recharge) return;
+  if (!LIENS_PRECIS.test(h) && !DEPUIS_NOTIF.test(h) && h !== '#/accueil') history.replaceState(history.state, '', location.pathname + location.search + '#/accueil');
+})();
+// Retour dans l'application après plus de 10 minutes : on repart aussi de l'Accueil
+let cacheeDepuis = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { cacheeDepuis = Date.now(); return; }
+  const longtemps = cacheeDepuis && Date.now() - cacheeDepuis > 10 * 60 * 1000;
+  cacheeDepuis = 0;
+  if (!longtemps) return;
+  const h = location.hash;
+  const occupe = /^#\/(deposer|direct\/|messages\/)/.test(h) || $('#form-depot button[disabled]') || !$('#modale').classList.contains('cache');
+  if (!occupe && !h.startsWith('#/accueil')) location.hash = '#/accueil';
+});
+
+// ---------- Bouton « retour » : demander avant de quitter l'application ----------
+// Une étape « garde » est ajoutée à l'historique. Quand l'utilisateur revient jusqu'au tout début,
+// on lui demande s'il veut quitter. S'il appuie encore sur retour, l'application se ferme normalement.
+(function gardeRetour() {
+  try {
+    history.replaceState({ ...(history.state || {}), mw: 'base' }, '', location.href);
+    history.pushState({ mw: 'garde' }, '', location.href);
+  } catch (_) { return; }
+  let demandeOuverte = false;
+  window.addEventListener('popstate', (e) => {
+    if (e.state?.mw !== 'base') { if (demandeOuverte) { demandeOuverte = false; fermerModale(); } return; }
+    if (demandeOuverte) return;
+    demandeOuverte = true;
+    const rester = () => { demandeOuverte = false; fermerModale(); try { history.pushState({ mw: 'garde' }, '', location.href); } catch (_) {} };
+    ouvrirModale(`
+      <div class="quitter-app">
+        <div class="quitter-icone">⏻</div>
+        <h2 style="margin:6px 0 4px">Quitter MongongoWay ?</h2>
+        <p class="doux petit" style="margin:0 0 16px">Appuyez encore sur « retour » ou touchez « Quitter » pour fermer l'application.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button class="btn secondaire" id="btn-rester">Rester</button>
+          <button class="btn" id="btn-quitter">Quitter</button>
+        </div>
+      </div>`);
+    $('#btn-rester').onclick = rester;
+    $('#modale').addEventListener('click', function fond(ev) { if (ev.target.id === 'modale') { this.removeEventListener('click', fond); if (demandeOuverte) rester(); } });
+    $('#btn-quitter').onclick = () => {
+      demandeOuverte = false; fermerModale();
+      try { window.close(); } catch (_) {}
+      setTimeout(() => { history.back(); setTimeout(() => toast('Appuyez encore sur « retour » pour quitter.'), 400); }, 150);
+    };
+  });
+})();
+
 // =========================================================
 // CONNEXION / INSCRIPTION
 // =========================================================
@@ -651,6 +709,25 @@ audio.addEventListener('ended', () => suivant(1));
 audio.addEventListener('timeupdate', () => {
   if (audio.duration) $('#lecteur-barre').value = (audio.currentTime / audio.duration) * 100;
 });
+// ---------- Écoute en arrière-plan : écran éteint ou autre application ouverte ----------
+// Commandes sur l'écran de verrouillage et dans la barre de notifications (lecture, pause, avancer, suivant…)
+if ('mediaSession' in navigator) {
+  const ms = navigator.mediaSession;
+  const action = (nom, f) => { try { ms.setActionHandler(nom, f); } catch (_) {} };
+  action('play', () => audio.play());
+  action('pause', () => audio.pause());
+  action('stop', () => audio.pause());
+  action('seekbackward', (d) => { audio.currentTime = Math.max(0, audio.currentTime - (d.seekOffset || 10)); });
+  action('seekforward', (d) => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d.seekOffset || 10)); });
+  action('seekto', (d) => { if (d.fastSeek && audio.fastSeek) audio.fastSeek(d.seekTime); else audio.currentTime = d.seekTime; });
+  action('nexttrack', () => suivant(1));
+  action('previoustrack', () => suivant(-1));
+  const position = () => { try { if (audio.duration && isFinite(audio.duration)) ms.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 }); } catch (_) {} };
+  audio.addEventListener('play', () => { ms.playbackState = 'playing'; position(); });
+  audio.addEventListener('pause', () => { ms.playbackState = 'paused'; position(); });
+  audio.addEventListener('loadedmetadata', position);
+  audio.addEventListener('seeked', position);
+}
 $('#lecteur-barre').addEventListener('input', (e) => {
   if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
 });
@@ -1045,34 +1122,45 @@ async function vueDeposer() {
   const albums = [...new Set((mesAlbums || []).map((x) => x.album))].sort((a, b) => a.localeCompare(b, 'fr'));
 
   vue.innerHTML = `
-    <h1>Déposer un titre</h1>
+    <h1>Déposer</h1>
+    <div class="choix-nombre" role="tablist">
+      <button type="button" data-nombre="un" class="actif">Un titre</button>
+      <button type="button" data-nombre="plusieurs">Plusieurs titres</button>
+    </div>
     <form id="form-depot">
-      <label for="d-titre">Titre de la chanson</label>
-      <input id="d-titre" required maxlength="120">
+      <div id="bloc-titre-unique">
+        <label for="d-titre">Titre de la chanson</label>
+        <input id="d-titre" maxlength="120">
+      </div>
       <label for="d-genre">Genre</label>
       <select id="d-genre">${GENRES.map((g) => `<option>${g}</option>`).join('')}</select>
 
       <label>Que déposez-vous ?</label>
       <div class="choix-depot">
-        <label><input type="radio" name="mode" value="video" checked><span>🎬 <b>Une vidéo</b><br><span class="doux petit">Le clip est publié tel quel</span></span></label>
-        <label><input type="radio" name="mode" value="audio"><span>🎵 <b>Un audio</b><br><span class="doux petit">Une vidéo est créée avec la pochette, le titre et votre nom</span></span></label>
+        <label><input type="radio" name="mode" value="video" checked><span>🎬 <b>Vidéo</b><br><span class="doux petit">Le clip est publié tel quel</span></span></label>
+        <label><input type="radio" name="mode" value="audio"><span>🎵 <b>Audio</b><br><span class="doux petit">Une vidéo est créée avec la pochette, le titre et votre nom</span></span></label>
       </div>
 
       <div id="bloc-mode-video">
-        <label for="d-video">Vidéo du chant (MP4, 50 Mo max. après compression)</label>
+        <label for="d-video" id="lbl-video">Vidéo du chant (MP4, 50 Mo max. après compression)</label>
         <input id="d-video" type="file" accept="video/mp4,video/webm,video/quicktime,video/3gpp,.mp4,.mov,.webm,.3gp">
         <p class="doux petit" style="margin:6px 0 0">Les croyants pourront l'écouter, et la télécharger en audio (le son est tiré de la vidéo) ou en vidéo.</p>
         <div id="bloc-compression" class="carte cache" style="margin:10px 0 0"></div>
       </div>
       <div id="bloc-mode-audio" class="cache">
-        <label for="d-audio">Fichier audio (MP3, M4A, WAV…)</label>
+        <label for="d-audio" id="lbl-audio">Fichier audio (MP3, M4A, WAV…)</label>
         <input id="d-audio" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac">
         <p class="doux petit" style="margin:6px 0 0">MongongoWay crée automatiquement la vidéo à partir de votre pochette, du titre et de votre nom d'artiste. Aperçu :</p>
         <canvas id="apercu-video" width="480" height="480" class="apercu-video"></canvas>
         <div id="info-audio" class="doux petit"></div>
       </div>
 
-      <label for="d-pochette">Pochette (image carrée, 5 Mo max., facultatif)</label>
+      <div id="bloc-lot" class="cache">
+        <p class="doux petit" style="margin:8px 0 0">Vérifiez le titre de chaque chanson (il est repris du nom du fichier) et l'ordre des pistes. Les titres sont déposés l'un après l'autre.</p>
+        <div id="liste-lot" class="liste-lot"></div>
+      </div>
+
+      <label for="d-pochette" id="lbl-pochette">Pochette (image carrée, 5 Mo max., facultatif)</label>
       <input id="d-pochette" type="file" accept="image/jpeg,image/png,image/webp">
 
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
@@ -1082,7 +1170,7 @@ async function vueDeposer() {
           <datalist id="albums">${albums.map((a) => `<option value="${esc(a)}">`).join('')}</datalist>
         </div>
         <div>
-          <label for="d-piste">N° de piste</label>
+          <label for="d-piste" id="lbl-piste">N° de piste</label>
           <input id="d-piste" type="number" min="1" step="1" placeholder="1">
         </div>
       </div>
@@ -1093,32 +1181,101 @@ async function vueDeposer() {
         <label for="d-prix-video">Prix du téléchargement vidéo (USD)</label>
         <input id="d-prix-video" type="number" min="0.1" step="0.1" value="${prixVideoDefaut}">
       </div>
-      <label for="d-paroles">Paroles (facultatif)</label>
-      <textarea id="d-paroles"></textarea>
+      <div id="bloc-paroles">
+        <label for="d-paroles">Paroles (facultatif)</label>
+        <textarea id="d-paroles"></textarea>
+      </div>
       <div class="progression cache" id="prog"><div></div></div>
       <div id="erreur-depot" class="carte cache" style="border-color:var(--rouge);margin-top:14px"></div>
-      <button class="btn plein" type="submit">Enregistrer le titre</button>
-      <p class="doux petit" style="text-align:center">Le titre est d'abord enregistré en brouillon. Vous l'enverrez ensuite à l'administrateur pour validation.</p>
+      <button class="btn plein" type="submit" id="btn-depot">Enregistrer le titre</button>
+      <p class="doux petit" style="text-align:center">Les titres sont d'abord enregistrés en brouillon. Vous les enverrez ensuite à l'administrateur pour validation.</p>
     </form>`;
 
-  // Choix Vidéo / Audio
   const modeDepot = () => $('input[name=mode]:checked')?.value || 'video';
+  let plusieurs = false;
+  let lot = [];          // [{ fichier, titre, etat, son?, info? }]
+  let sonDepot = null, infoVid = null;
+  const debutPiste = () => {
+    const n = (mesAlbums || []).filter((x) => x.album === $('#d-album').value.trim()).reduce((m, x) => Math.max(m, x.piste || 0), 0);
+    return Number($('#d-piste').value) || n + 1;
+  };
+  const champFichier = () => (modeDepot() === 'audio' ? $('#d-audio') : $('#d-video'));
+
   const dessinerApercu = () => {
-    if (modeDepot() !== 'audio') return;
+    if (modeDepot() !== 'audio' || plusieurs) return;
     dessinerImageVideo($('#apercu-video'), { titre: $('#d-titre').value.trim() || 'Titre de la chanson', artiste: etat.artiste?.nom_scene || '', pochette: $('#d-pochette').files[0] }).catch(() => {});
   };
-  $$('input[name=mode]').forEach((x) => x.onchange = () => {
+
+  // Liste des chansons sélectionnées (mode « plusieurs titres »)
+  const titreDepuisFichier = (nom) => nom.replace(/\.[^.]+$/, '').replace(/^\s*\d{1,3}(?:\s*[-_.)]\s*|\s+)(?=\S)/, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Sans titre';
+  const afficherLot = () => {
+    const d = debutPiste(), avecAlbum = !!$('#d-album').value.trim();
+    $('#liste-lot').innerHTML = lot.length ? lot.map((x, i) => `
+      <div class="ligne-lot ${x.etat || ''}" data-i="${i}">
+        <span class="num-lot">${avecAlbum ? d + i : i + 1}</span>
+        <div class="corps-lot">
+          <input value="${esc(x.titre)}" maxlength="120" data-titre="${i}" aria-label="Titre de la chanson ${i + 1}">
+          <span class="doux petit">${esc(x.fichier.name)} · ${(x.fichier.size / 1048576).toFixed(1).replace('.', ',')} Mo${x.message ? ' · ' + esc(x.message) : ''}</span>
+        </div>
+        <div class="outils-lot">
+          <button type="button" data-monter="${i}" title="Monter" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" data-descendre="${i}" title="Descendre" ${i === lot.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" data-enlever="${i}" title="Enlever">✕</button>
+        </div>
+      </div>`).join('') : '<p class="doux petit">Aucune chanson choisie.</p>';
+    $('#btn-depot').textContent = lot.length > 1 ? `Enregistrer les ${lot.length} titres` : 'Enregistrer le titre';
+    $('#bloc-lot').classList.toggle('cache', !lot.length);
+  };
+  $('#liste-lot').addEventListener('input', (e) => { const i = e.target.dataset.titre; if (i != null) lot[i].titre = e.target.value; });
+  $('#liste-lot').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b || b.disabled) return;
+    const i = Number(b.dataset.monter ?? b.dataset.descendre ?? b.dataset.enlever);
+    if (b.dataset.monter != null) [lot[i - 1], lot[i]] = [lot[i], lot[i - 1]];
+    else if (b.dataset.descendre != null) [lot[i + 1], lot[i]] = [lot[i], lot[i + 1]];
+    else lot.splice(i, 1);
+    afficherLot();
+  });
+
+  const majAffichage = () => {
     const audioMode = modeDepot() === 'audio';
+    $$('.choix-nombre button').forEach((b) => b.classList.toggle('actif', (b.dataset.nombre === 'plusieurs') === plusieurs));
     $('#bloc-mode-video').classList.toggle('cache', audioMode);
     $('#bloc-mode-audio').classList.toggle('cache', !audioMode);
-    $('#bloc-prix-video').classList.toggle('cache', audioMode ? false : !$('#d-video').files[0]);
+    $('#bloc-titre-unique').classList.toggle('cache', plusieurs);
+    $('#bloc-paroles').classList.toggle('cache', plusieurs);
+    $('#apercu-video').classList.toggle('cache', plusieurs);
+    $('#apercu-video').previousElementSibling.classList.toggle('cache', plusieurs);
+    $('#bloc-compression').classList.add('cache');
+    $('#d-video').multiple = $('#d-audio').multiple = plusieurs;
+    $('#lbl-video').textContent = plusieurs ? 'Vidéos des chants (sélection multiple)' : 'Vidéo du chant (MP4, 50 Mo max. après compression)';
+    $('#lbl-audio').textContent = plusieurs ? 'Fichiers audio (sélection multiple)' : 'Fichier audio (MP3, M4A, WAV…)';
+    $('#lbl-pochette').textContent = plusieurs ? 'Pochette commune à tous les titres (facultatif)' : 'Pochette (image carrée, 5 Mo max., facultatif)';
+    $('#lbl-piste').textContent = plusieurs ? '1re piste' : 'N° de piste';
+    $('#bloc-prix-video').classList.toggle('cache', !audioMode && !champFichier().files.length);
+    if (plusieurs) afficherLot(); else { $('#bloc-lot').classList.add('cache'); $('#btn-depot').textContent = 'Enregistrer le titre'; }
     dessinerApercu();
-  });
+  };
+  const viderChoix = () => { $('#d-video').value = ''; $('#d-audio').value = ''; lot = []; sonDepot = null; infoVid = null; $('#info-audio').textContent = ''; };
+  $$('.choix-nombre button').forEach((b) => b.onclick = () => { plusieurs = b.dataset.nombre === 'plusieurs'; viderChoix(); majAffichage(); });
+  $$('input[name=mode]').forEach((x) => x.onchange = () => { viderChoix(); majAffichage(); });
   $('#d-titre').addEventListener('input', () => { clearTimeout(dessinerApercu.t); dessinerApercu.t = setTimeout(dessinerApercu, 300); });
   $('#d-pochette').addEventListener('change', dessinerApercu);
-  let sonDepot = null;
+  $('#d-album').oninput = () => {
+    $('#d-piste').placeholder = String(debutPiste());
+    if (plusieurs) afficherLot();
+  };
+  $('#d-piste').oninput = () => { if (plusieurs) afficherLot(); };
+
+  const ajouterAuLot = (fichiers) => {
+    for (const f of fichiers) if (!lot.some((x) => x.fichier.name === f.name && x.fichier.size === f.size)) lot.push({ fichier: f, titre: titreDepuisFichier(f.name) });
+    lot.sort((a, b) => a.fichier.name.localeCompare(b.fichier.name, 'fr', { numeric: true }));
+    afficherLot();
+  };
+
   $('#d-audio').onchange = async () => {
-    const f = $('#d-audio').files[0]; sonDepot = null;
+    const fs = [...$('#d-audio').files];
+    if (plusieurs) { ajouterAuLot(fs); $('#d-audio').value = ''; return; }
+    const f = fs[0]; sonDepot = null;
     const info = $('#info-audio');
     if (!f) { info.textContent = ''; return; }
     info.textContent = 'Lecture du fichier audio…';
@@ -1129,10 +1286,11 @@ async function vueDeposer() {
   };
 
   // Analyse de la vidéo choisie et proposition de compression
-  let infoVid = null;
   $('#d-video').onchange = async () => {
-    const f = $('#d-video').files[0];
-    $('#bloc-prix-video').classList.toggle('cache', !f);
+    const fs = [...$('#d-video').files];
+    $('#bloc-prix-video').classList.toggle('cache', !fs.length && !lot.length);
+    if (plusieurs) { ajouterAuLot(fs); $('#d-video').value = ''; $('#bloc-prix-video').classList.toggle('cache', !lot.length); return; }
+    const f = fs[0];
     const bloc = $('#bloc-compression');
     infoVid = null;
     if (!f) { bloc.classList.add('cache'); return; }
@@ -1155,43 +1313,27 @@ async function vueDeposer() {
         <span><b>Garder l'original</b><br><span class="doux petit">${tropLourd ? 'Impossible : plus de 50 Mo' : 'Aucune perte de qualité'}</span></span>
       </label>`;
   };
-  $('#d-album').oninput = () => {
-    // Propose la piste suivante de l'album choisi
-    const n = (mesAlbums || []).filter((x) => x.album === $('#d-album').value.trim()).reduce((m, x) => Math.max(m, x.piste || 0), 0);
-    $('#d-piste').placeholder = String(n + 1);
-  };
 
-  const horo = Date.now();
-  $('#form-depot').onsubmit = async (e) => {
-    e.preventDefault();
-    if (modeDepot() === 'audio') return deposerAudio(e);
-    let fVid = $('#d-video').files[0];
+  const uid = etat.session.user.id;
 
-    const fImg = $('#d-pochette').files[0];
-    if (!fVid) return toast('Choisissez la vidéo du chant.', true);
-    const compresser = !!fVid && $('input[name=compr]:checked')?.value !== 'non';
-    if (fVid && !compresser && fVid.size > 50 * 1024 * 1024) return toast('Vidéo trop lourde (50 Mo max.) : choisissez « Compresser ».', true);
-    if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
-
-    const bouton = e.submitter; bouton.disabled = true;
-    const prog = $('#prog'); prog.classList.remove('cache');
-    const avancer = (p, msg) => { prog.firstElementChild.style.width = p + '%'; bouton.textContent = msg; };
-    const uid = etat.session.user.id;
-    const etape = { nom: 'préparation' };
-    $('#erreur-depot').classList.add('cache');
-    let verrouEcran = null;
-    try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
-    try {
-      let dureeSec = null;
+  // Prépare et envoie UN titre. `avancer(fraction 0→1, message)` ; `etape.nom` sert au message d'erreur.
+  async function publierUnTitre(o, avancer, etape) {
+    const horo = o.horo;
+    let cheminAud = null, cheminVid = null, largeur = null, hauteur = null, dureeSec = null, origine = o.mode;
+    if (o.mode === 'video') {
+      let fVid = o.fichier;
+      etape.nom = 'analyse de la vidéo';
+      const info = o.info || await lireInfosVideo(fVid);
+      const mo = fVid.size / 1048576;
+      const compresser = o.compresser ?? (mo > 20 || Math.max(info.largeur, info.hauteur) > 1280);
+      if (!compresser && fVid.size > 50 * 1024 * 1024) throw new Error('Vidéo trop lourde (50 Mo max.) : choisissez « Compresser ».');
       if (compresser) {
         const avant = fVid.size;
         etape.nom = 'compression de la vidéo';
-        avancer(2, 'Compression de la vidéo…');
+        avancer(0.02, 'Compression de la vidéo…');
         try {
-          const info = infoVid || await lireInfosVideo(fVid);
-          const res = await compresserVideo(fVid, info, (x, mode) => avancer(2 + Math.round(x * 28), `${mode === 'lent' ? 'Compression (gardez l\'écran allumé)' : 'Compression de la vidéo'}… ${Math.round(x * 100)} %`));
+          const res = await compresserVideo(fVid, info, (x, m) => avancer(0.02 + x * 0.45, `${m === 'lent' ? 'Compression (gardez l\'écran allumé)' : 'Compression de la vidéo'}… ${Math.round(x * 100)} %`));
           if (res.size < avant) fVid = res;
-          toast(`Vidéo compressée : ${(avant / 1048576).toFixed(0)} Mo → ${(fVid.size / 1048576).toFixed(0)} Mo`);
         } catch (err) {
           console.error(err);
           if (avant > 50 * 1024 * 1024) throw new Error('La compression a échoué sur ce téléphone. Compressez la vidéo avec une autre application (ex. CapCut, en 720p), puis réessayez.');
@@ -1199,171 +1341,176 @@ async function vueDeposer() {
         }
         if (fVid.size > 50 * 1024 * 1024) throw new Error('Même compressée, la vidéo dépasse 50 Mo. Raccourcissez-la ou compressez-la avec une autre application.');
       }
-      // Durée lue sur la vidéo finale (après compression), sinon sur l'originale
       const infoFinale = await lireInfosVideo(fVid);
-      dureeSec = Math.round(infoFinale.duree || infoVid?.duree || 0) || null;
-
-      let cheminVid = null;
-      if (fVid) {
-        avancer(55, 'Envoi de la vidéo… (patientez)');
-        const extV = fVid.type === 'video/webm' ? 'webm' : fVid.type === 'video/mp4' && !fVid.name ? 'mp4' : (fVid.name.split('.').pop() || 'mp4').toLowerCase();
-        const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
-        cheminVid = `${uid}/${horo}.${extV}`;
-        etape.nom = 'envoi de la vidéo';
-        let dernierPct = 55;
-        avancer(55, `Envoi de la vidéo… 0 % · 0 / ${(fVid.size / 1048576).toFixed(1).replace('.', ',')} Mo (gardez l'écran allumé)`);
-        await envoyerFichier('videos', cheminVid, fVid, typeV, (x, detail) => { if (x === null) return avancer(dernierPct, `Envoi de la vidéo : ${detail}`); dernierPct = 55 + Math.round(x * 28); avancer(dernierPct, `Envoi de la vidéo… ${Math.round(x * 100)} %${detail ? ' · ' + detail : ''}`); });
-      }
-
-      let cheminImg = null;
-      if (fImg) {
-        avancer(85, 'Envoi de la pochette…');
-        const extI = (fImg.name.split('.').pop() || 'jpg').toLowerCase();
-        cheminImg = `${uid}/${horo}.${extI}`;
-        etape.nom = 'envoi de la pochette';
-        const upI = await sb.storage.from('pochettes').upload(cheminImg, fImg, { contentType: fImg.type, upsert: true });
-        if (upI.error) throw upI.error;
-      }
-
-      etape.nom = 'enregistrement du titre';
-      avancer(95, 'Enregistrement…');
-      const album = $('#d-album').value.trim() || null;
-      const piste = Number($('#d-piste').value) || (album ? Number($('#d-piste').placeholder) || null : null);
-      const { error } = await sb.from('titres').insert({
-        artiste_id: etat.artiste.id,
-        titre: $('#d-titre').value.trim(),
-        genre: $('#d-genre').value,
-        album,
-        piste,
-        paroles: $('#d-paroles').value.trim() || null,
-        audio_path: null,
-        video_path: cheminVid,
-        video_largeur: infoFinale.largeur || null,
-        video_hauteur: infoFinale.hauteur || null,
-        pochette_path: cheminImg,
-        duree_sec: dureeSec || null,
-        prix_telechargement: Number($('#d-prix').value),
-        prix_video: fVid ? Number($('#d-prix-video').value || prixVideoDefaut) : prixVideoDefaut,
-        devise: 'USD',
-        origine: 'video'
-      });
-      if (error) throw error;
-      avancer(100, 'Terminé ✓');
-      try { verrouEcran?.release(); } catch (_) {}
-      toast('Titre enregistré. Envoyez-le maintenant pour validation.');
-      location.hash = '#/artiste';
-    } catch (err) {
-      erreur(err);
-      const zoneErr = $('#erreur-depot');
-      zoneErr.innerHTML = `<b style="color:var(--rouge)">Échec à l'étape : ${esc(etape.nom)}</b><p class="petit" style="margin:6px 0 0">${esc(err?.message || String(err))}</p><p class="doux petit" style="margin:6px 0 0">Réessayez : les fichiers déjà envoyés seront réutilisés. Si l'erreur revient, faites une capture de ce message.</p>`;
-      zoneErr.classList.remove('cache');
-      zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      bouton.disabled = false; bouton.textContent = 'Réessayer';
-      try { verrouEcran?.release(); } catch (_) {}
-      prog.classList.add('cache');
-    }
-  };
-
-  // Dépôt d'un AUDIO : on garde l'audio et on crée la vidéo (pochette + titre + artiste)
-  async function deposerAudio(e) {
-    const fAud = $('#d-audio').files[0];
-    const fImg = $('#d-pochette').files[0];
-    if (!fAud) return toast('Choisissez le fichier audio.', true);
-    if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
-    const titre = $('#d-titre').value.trim();
-    const bouton = e.submitter; bouton.disabled = true;
-    const prog = $('#prog'); prog.classList.remove('cache');
-    const avancer = (p, msg) => { prog.firstElementChild.style.width = p + '%'; bouton.textContent = msg; };
-    const uid = etat.session.user.id;
-    const etape = { nom: 'lecture de l\'audio' };
-    $('#erreur-depot').classList.add('cache');
-    let verrouEcran = null;
-    try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
-    try {
-      avancer(2, 'Lecture de l\'audio…');
-      const son = sonDepot || await decoderAudio(fAud);
-      const dureeSec = Math.round(son.duration) || null;
+      dureeSec = Math.round(infoFinale.duree || info.duree || 0) || null;
+      largeur = infoFinale.largeur || null; hauteur = infoFinale.hauteur || null;
+      const extV = fVid.type === 'video/webm' ? 'webm' : fVid.type === 'video/mp4' && !fVid.name ? 'mp4' : (fVid.name.split('.').pop() || 'mp4').toLowerCase();
+      const typeV = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp' }[extV] || fVid.type || 'video/mp4';
+      cheminVid = `${uid}/${horo}.${extV}`;
+      etape.nom = 'envoi de la vidéo';
+      let dernier = 0.5;
+      await envoyerFichier('videos', cheminVid, fVid, typeV, (x, detail) => { if (x === null) return avancer(dernier, `Envoi de la vidéo : ${detail}`); dernier = 0.5 + x * 0.45; avancer(dernier, `Envoi de la vidéo… ${Math.round(x * 100)} %${detail ? ' · ' + detail : ''}`); });
+    } else {
+      const fAud = o.fichier;
+      etape.nom = 'lecture de l\'audio';
+      avancer(0.02, 'Lecture de l\'audio…');
+      const son = o.son || await decoderAudio(fAud);
+      dureeSec = Math.round(son.duration) || null;
       if (son.duration > 20 * 60) throw new Error('Audio trop long (20 minutes maximum).');
-
-      // 1) Fichier audio à envoyer : l'original s'il est accepté (MP3/M4A ≤ 30 Mo), sinon conversion en MP3
+      // Audio d'origine s'il est accepté (MP3/M4A ≤ 30 Mo), sinon conversion en MP3
       const typesOk = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/x-m4a', 'audio/m4a'];
-      const ext0 = (fAud.name.split('.').pop() || '').toLowerCase();
-      let fichierAudio = fAud, typeA = fAud.type === 'audio/mp3' ? 'audio/mpeg' : fAud.type, extA = ext0;
+      let fichierAudio = fAud, typeA = fAud.type === 'audio/mp3' ? 'audio/mpeg' : fAud.type, extA = (fAud.name.split('.').pop() || '').toLowerCase();
       if (!typesOk.includes(fAud.type) || fAud.size > 30 * 1024 * 1024) {
         etape.nom = 'conversion en MP3';
-        const r = await extraireAudio(fAud, (x) => avancer(4 + Math.round(x * 18), `Conversion en MP3… ${Math.round(x * 100)} %`), son);
+        const r = await extraireAudio(fAud, (x) => avancer(0.04 + x * 0.16, `Conversion en MP3… ${Math.round(x * 100)} %`), son);
         fichierAudio = r.fichier; typeA = 'audio/mpeg'; extA = 'mp3';
         if (fichierAudio.size > 30 * 1024 * 1024) throw new Error('Audio trop lourd, même converti (30 Mo max.).');
       }
       if (typeA === 'audio/m4a') typeA = 'audio/x-m4a';
       if (!extA || extA.length > 4) extA = typeA === 'audio/mpeg' ? 'mp3' : 'm4a';
-
-      // 2) Création de la vidéo sur le téléphone
+      // Création de la vidéo sur le téléphone
       etape.nom = 'création de la vidéo';
       let video = null;
       try {
-        video = await creerVideoDepuisAudio(son, { titre, artiste: etat.artiste?.nom_scene || '', pochette: fImg }, (x) => avancer(22 + Math.round(x * 30), `Création de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
-        if (video.fichier.size > 50 * 1024 * 1024) { console.warn('Vidéo générée trop lourde'); video = null; }
+        video = await creerVideoDepuisAudio(son, { titre: o.titre, artiste: etat.artiste?.nom_scene || '', pochette: o.pochette }, (x) => avancer(0.2 + x * 0.3, `Création de la vidéo… ${Math.round(x * 100)} % (gardez l'écran allumé)`));
+        if (video.fichier.size > 50 * 1024 * 1024) video = null;
       } catch (err) {
         console.error(err);
-        toast('La vidéo n\'a pas pu être créée sur ce téléphone : le titre sera publié en audio seul.');
+        o.sansVideo = true;
       }
-
-      // 3) Envois
-      const cheminAud = `${uid}/${horo}.${extA}`;
+      cheminAud = `${uid}/${horo}.${extA}`;
       etape.nom = 'envoi de l\'audio';
-      let dernier = 52;
-      await envoyerFichier('audio', cheminAud, fichierAudio, typeA, (x, detail) => { if (x === null) return avancer(dernier, `Envoi de l'audio : ${detail}`); dernier = 52 + Math.round(x * 14); avancer(dernier, `Envoi de l'audio… ${Math.round(x * 100)} %`); });
-      let cheminVid = null;
+      let dernier = 0.5;
+      await envoyerFichier('audio', cheminAud, fichierAudio, typeA, (x, detail) => { if (x === null) return avancer(dernier, `Envoi de l'audio : ${detail}`); dernier = 0.5 + x * 0.2; avancer(dernier, `Envoi de l'audio… ${Math.round(x * 100)} %`); });
       if (video) {
-        cheminVid = `${uid}/${horo}.mp4`;
+        cheminVid = `${uid}/${horo}.mp4`; largeur = video.largeur; hauteur = video.hauteur;
         etape.nom = 'envoi de la vidéo créée';
-        dernier = 66;
-        await envoyerFichier('videos', cheminVid, video.fichier, 'video/mp4', (x, detail) => { if (x === null) return avancer(dernier, `Envoi de la vidéo : ${detail}`); dernier = 66 + Math.round(x * 18); avancer(dernier, `Envoi de la vidéo… ${Math.round(x * 100)} %`); });
-      }
-      let cheminImg = null;
-      if (fImg) {
-        avancer(86, 'Envoi de la pochette…');
-        etape.nom = 'envoi de la pochette';
-        cheminImg = `${uid}/${horo}.${(fImg.name.split('.').pop() || 'jpg').toLowerCase()}`;
-        const upI = await sb.storage.from('pochettes').upload(cheminImg, fImg, { contentType: fImg.type, upsert: true });
-        if (upI.error) throw upI.error;
-      }
-
-      etape.nom = 'enregistrement du titre';
-      avancer(95, 'Enregistrement…');
-      const album = $('#d-album').value.trim() || null;
-      const piste = Number($('#d-piste').value) || (album ? Number($('#d-piste').placeholder) || null : null);
-      const { error } = await sb.from('titres').insert({
-        artiste_id: etat.artiste.id, titre, genre: $('#d-genre').value, album, piste,
-        paroles: $('#d-paroles').value.trim() || null,
-        audio_path: cheminAud,
-        video_path: cheminVid,
-        video_largeur: video ? video.largeur : null,
-        video_hauteur: video ? video.hauteur : null,
-        pochette_path: cheminImg,
-        duree_sec: dureeSec,
-        prix_telechargement: Number($('#d-prix').value),
-        prix_video: Number($('#d-prix-video').value || prixVideoDefaut),
-        devise: 'USD',
-        origine: 'audio'
-      });
-      if (error) throw error;
-      avancer(100, 'Terminé ✓');
-      try { verrouEcran?.release(); } catch (_) {}
-      toast(video ? 'Titre enregistré avec sa vidéo. Envoyez-le maintenant pour validation.' : 'Titre enregistré (audio). Envoyez-le maintenant pour validation.');
-      location.hash = '#/artiste';
-    } catch (err) {
-      erreur(err);
-      const zoneErr = $('#erreur-depot');
-      zoneErr.innerHTML = `<b style="color:var(--rouge)">Échec à l'étape : ${esc(etape.nom)}</b><p class="petit" style="margin:6px 0 0">${esc(err?.message || String(err))}</p><p class="doux petit" style="margin:6px 0 0">Réessayez. Si l'erreur revient, faites une capture de ce message.</p>`;
-      zoneErr.classList.remove('cache');
-      zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      bouton.disabled = false; bouton.textContent = 'Réessayer';
-      try { verrouEcran?.release(); } catch (_) {}
-      prog.classList.add('cache');
+        dernier = 0.7;
+        await envoyerFichier('videos', cheminVid, video.fichier, 'video/mp4', (x, detail) => { if (x === null) return avancer(dernier, `Envoi de la vidéo : ${detail}`); dernier = 0.7 + x * 0.25; avancer(dernier, `Envoi de la vidéo… ${Math.round(x * 100)} %`); });
+      } else o.sansVideo = true;
     }
+    etape.nom = 'enregistrement du titre';
+    avancer(0.97, 'Enregistrement…');
+    const { error } = await sb.from('titres').insert({
+      artiste_id: etat.artiste.id, titre: o.titre, genre: o.genre, album: o.album, piste: o.piste,
+      paroles: o.paroles || null,
+      audio_path: cheminAud, video_path: cheminVid,
+      video_largeur: largeur, video_hauteur: hauteur,
+      pochette_path: o.cheminImg, duree_sec: dureeSec,
+      prix_telechargement: o.prix, prix_video: o.prixVideo,
+      devise: 'USD', origine
+    });
+    if (error) throw error;
+    avancer(1, 'Terminé ✓');
   }
+
+  async function envoyerPochette(fImg, horo, etape) {
+    if (!fImg) return null;
+    etape.nom = 'envoi de la pochette';
+    const chemin = `${uid}/${horo}.${(fImg.name.split('.').pop() || 'jpg').toLowerCase()}`;
+    const upI = await sb.storage.from('pochettes').upload(chemin, fImg, { contentType: fImg.type, upsert: true });
+    if (upI.error) throw upI.error;
+    return chemin;
+  }
+
+  const horoUnique = Date.now();   // même nom de fichier en cas de nouvel essai : rien n'est envoyé deux fois
+  $('#form-depot').onsubmit = async (e) => {
+    e.preventDefault();
+    const fImg = $('#d-pochette').files[0];
+    if (fImg && fImg.size > 5 * 1024 * 1024) return toast('Image trop lourde (5 Mo max.).', true);
+    const album = $('#d-album').value.trim() || null;
+    const commun = {
+      mode: modeDepot(), genre: $('#d-genre').value, album, pochette: fImg,
+      prix: Number($('#d-prix').value), prixVideo: Number($('#d-prix-video').value || prixVideoDefaut)
+    };
+    const bouton = $('#btn-depot'); bouton.disabled = true;
+    const prog = $('#prog'); prog.classList.remove('cache');
+    const zoneErr = $('#erreur-depot'); zoneErr.classList.add('cache');
+    let verrouEcran = null;
+    try { verrouEcran = await navigator.wakeLock?.request('screen'); } catch (_) {}
+    const fin = () => { try { verrouEcran?.release(); } catch (_) {} };
+
+    // ---------- UN titre ----------
+    if (!plusieurs) {
+      const fichier = champFichier().files[0];
+      const titre = $('#d-titre').value.trim();
+      if (!titre) { bouton.disabled = false; prog.classList.add('cache'); fin(); $('#d-titre').focus(); return toast('Indiquez le titre de la chanson.', true); }
+      if (!fichier) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast(commun.mode === 'audio' ? 'Choisissez le fichier audio.' : 'Choisissez la vidéo du chant.', true); }
+      const etape = { nom: 'préparation' };
+      const avancer = (x, msg) => { prog.firstElementChild.style.width = Math.round(x * 100) + '%'; bouton.textContent = msg; };
+      try {
+        const cheminImg = await envoyerPochette(fImg, horoUnique, etape);
+        const o = { ...commun, fichier, titre, horo: horoUnique, cheminImg, son: sonDepot, info: infoVid,
+          compresser: commun.mode === 'video' && $('input[name=compr]:checked') ? $('input[name=compr]:checked').value !== 'non' : undefined,
+          piste: Number($('#d-piste').value) || (album ? Number($('#d-piste').placeholder) || null : null),
+          paroles: $('#d-paroles').value.trim() };
+        await publierUnTitre(o, avancer, etape);
+        fin();
+        toast(o.sansVideo ? 'Titre enregistré (audio seul : la vidéo n\'a pas pu être créée sur ce téléphone). Envoyez-le pour validation.' : 'Titre enregistré. Envoyez-le maintenant pour validation.');
+        location.hash = '#/artiste';
+      } catch (err) {
+        erreur(err); fin();
+        zoneErr.innerHTML = `<b style="color:var(--rouge)">Échec à l'étape : ${esc(etape.nom)}</b><p class="petit" style="margin:6px 0 0">${esc(err?.message || String(err))}</p><p class="doux petit" style="margin:6px 0 0">Réessayez : les fichiers déjà envoyés seront réutilisés. Si l'erreur revient, faites une capture de ce message.</p>`;
+        zoneErr.classList.remove('cache');
+        zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        bouton.disabled = false; bouton.textContent = 'Réessayer';
+        prog.classList.add('cache');
+      }
+      return;
+    }
+
+    // ---------- PLUSIEURS titres ----------
+    const aFaire = lot.filter((x) => x.etat !== 'fait');
+    if (!aFaire.length) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast(lot.length ? 'Tous les titres sont déjà enregistrés.' : (commun.mode === 'audio' ? 'Choisissez les fichiers audio.' : 'Choisissez les vidéos.'), true); }
+    if (lot.some((x) => !x.titre.trim())) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast('Chaque chanson doit avoir un titre.', true); }
+    $$('#liste-lot input, #liste-lot button, .choix-nombre button, input[name=mode]').forEach((x) => x.disabled = true);
+    const etape = { nom: 'envoi de la pochette' };
+    let cheminImg = null;
+    try { cheminImg = await envoyerPochette(fImg, horoUnique, etape); }
+    catch (err) { erreur(err); toast('La pochette n\'a pas pu être envoyée : les titres seront déposés sans pochette.', true); }
+    const debut = debutPiste();
+    let reussis = 0, rates = 0, sansVid = 0;
+    for (let k = 0; k < lot.length; k++) {
+      const x = lot[k];
+      if (x.etat === 'fait') continue;
+      x.etat = 'en-cours'; x.message = 'en cours…'; afficherLot();
+      $$('#liste-lot input, #liste-lot button').forEach((y) => y.disabled = true);
+      const ligne = $(`#liste-lot [data-i="${k}"]`);
+      ligne?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const et = { nom: 'préparation' };
+      const n = aFaire.indexOf(x) + 1;
+      const avancer = (f, msg) => {
+        prog.firstElementChild.style.width = Math.round(((n - 1 + f) / aFaire.length) * 100) + '%';
+        bouton.textContent = `Titre ${n} / ${aFaire.length} · ${msg}`;
+      };
+      try {
+        if (!x.horo) x.horo = Date.now();
+        const o = { ...commun, fichier: x.fichier, titre: x.titre.trim(), horo: x.horo, cheminImg, piste: album ? debut + k : null };
+        await publierUnTitre(o, avancer, et);
+        x.etat = 'fait'; x.message = o.sansVideo ? '✓ enregistré (audio seul)' : '✓ enregistré'; reussis++;
+        if (o.sansVideo) sansVid++;
+      } catch (err) {
+        console.error(err);
+        x.etat = 'echec'; x.message = `✗ échec (${et.nom}) : ${err?.message || err}`; rates++;
+      }
+      afficherLot();
+      $$('#liste-lot input, #liste-lot button').forEach((y) => y.disabled = true);
+    }
+    fin();
+    prog.firstElementChild.style.width = '100%';
+    $$('#liste-lot input, #liste-lot button, .choix-nombre button, input[name=mode]').forEach((y) => y.disabled = false);
+    afficherLot();
+    if (!rates) {
+      toast(`${reussis} titre${reussis > 1 ? 's' : ''} enregistré${reussis > 1 ? 's' : ''}${sansVid ? ` (dont ${sansVid} en audio seul)` : ''}. Envoyez-les maintenant pour validation.`);
+      location.hash = '#/artiste';
+      return;
+    }
+    zoneErr.innerHTML = `<b style="color:var(--rouge)">${rates} titre${rates > 1 ? 's' : ''} non enregistré${rates > 1 ? 's' : ''}</b><p class="petit" style="margin:6px 0 0">${reussis} titre${reussis > 1 ? 's ont' : ' a'} bien été enregistré${reussis > 1 ? 's' : ''}. Touchez « Réessayer » : seuls les titres en échec seront renvoyés.</p>`;
+    zoneErr.classList.remove('cache');
+    zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    bouton.disabled = false; bouton.textContent = 'Réessayer les titres en échec';
+    prog.classList.add('cache');
+  };
 }
 
 // Envoi d'un fichier vers Supabase Storage.

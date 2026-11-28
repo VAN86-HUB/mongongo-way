@@ -619,3 +619,23 @@ html[data-theme=nuit] .carte.pub.evenement { background: rgba(36, 29, 59, .92); 
 .hl-actions .btn { padding: 5px 10px; font-size: 12px; }
 .ligne-hl { align-items: flex-start; }
 @media (max-width: 420px) { .choix-depot { grid-template-columns: 1fr; } }
+
+/* v35 : dépôt de plusieurs titres, confirmation avant de quitter */
+.choix-nombre { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 5px; margin: 4px 0 14px; border-radius: 999px; background: var(--carte, rgba(255,255,255,.05)); border: 1px solid var(--bord, rgba(255,255,255,.1)); }
+.choix-nombre button { border: 0; border-radius: 999px; padding: 10px 8px; font: inherit; font-weight: 600; background: transparent; color: var(--doux, #a69fbd); cursor: pointer; }
+.choix-nombre button.actif { background: var(--or); color: #1a1426; }
+.liste-lot { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ligne-lot { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 14px; background: var(--carte, rgba(255,255,255,.04)); border: 1px solid var(--bord, rgba(255,255,255,.1)); }
+.ligne-lot.en-cours { border-color: var(--or); }
+.ligne-lot.fait { border-color: #2fae6f; }
+.ligne-lot.echec { border-color: var(--rouge, #e05252); }
+.num-lot { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--or); color: #1a1426; }
+.corps-lot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.corps-lot input { margin: 0; padding: 8px 10px; }
+.corps-lot .petit { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ligne-lot.echec .corps-lot .petit { white-space: normal; color: var(--rouge, #e05252); }
+.outils-lot { display: flex; flex-direction: column; gap: 3px; }
+.outils-lot button { width: 30px; height: 26px; border-radius: 8px; border: 1px solid var(--bord, rgba(255,255,255,.12)); background: transparent; color: var(--texte); cursor: pointer; font-size: 13px; line-height: 1; }
+.outils-lot button:disabled { opacity: .3; cursor: default; }
+.quitter-app { text-align: center; }
+.quitter-icone { width: 54px; height: 54px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--or); color: #1a1426; }
