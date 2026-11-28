@@ -1,5 +1,5 @@
 // Service worker MongongoWay : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v36';
+const VERSION = 'mongongo-v37';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './fond.jpg'
@@ -27,16 +27,28 @@ self.addEventListener('fetch', (e) => {
   const frais = e.request.mode === 'navigate'
     ? fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
     : fetch(new Request(e.request, { cache: 'no-cache' }));
+  const isoler = /\/(convertir\.html|convertir\.js|ffmpeg\.core\.(js|wasm|worker\.js))$/.test(url.pathname);
   e.respondWith(
     frais
       .then((rep) => {
         const copie = rep.clone();
         caches.open(VERSION).then((c) => c.put(e.request, copie));
-        return rep;
+        return isoler ? avecIsolation(rep) : rep;
       })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('./index.html')))
+      .catch(() => caches.match(e.request).then((r) => (r && isoler ? avecIsolation(r) : r) || caches.match('./index.html')))
   );
 });
+
+// La page de conversion audio (FFmpeg) a besoin d'être « isolée » pour utiliser plusieurs cœurs du processeur.
+// GitHub Pages ne permet pas d'ajouter ces en-têtes : le service worker les ajoute lui-même, pour ces fichiers seulement.
+function avecIsolation(rep) {
+  if (!rep || rep.status === 0 || rep.type === 'opaque') return rep;
+  const h = new Headers(rep.headers);
+  h.set('Cross-Origin-Opener-Policy', 'same-origin');
+  h.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  h.set('Cross-Origin-Resource-Policy', 'same-origin');
+  return new Response(rep.body, { status: rep.status, statusText: rep.statusText, headers: h });
+}
 
 // Notifications de l'administrateur (nouvelles demandes à valider)
 self.addEventListener('push', (e) => {

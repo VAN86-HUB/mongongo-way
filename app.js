@@ -219,14 +219,16 @@ window.addEventListener('hashchange', router);
 
 // ---------- À chaque ouverture, l'application commence par l'Accueil ----------
 // Sauf si on l'ouvre par un lien précis (chanson partagée, notification, direct, profil…).
-const LIENS_PRECIS = /^#\/(titre|direct|a|membre|messages|notifications|accueil|fil|cv)\/./;
+const LIENS_PRECIS = /^#\/(titre|direct|a|membre|messages|notifications|accueil|fil|cv|deposer)\/./;
 const DEPUIS_NOTIF = /^#\/(notifications|admin)/;
+let ouvertureFraiche = false;
 (function ouvrirSurAccueil() {
   const h = location.hash;
   // Simple rechargement (mise à jour, « Réessayer ») : on reste sur la même page
   let recharge = false;
   try { recharge = performance.getEntriesByType('navigation')[0]?.type === 'reload' || sessionStorage.getItem('mw-ouverte') === '1'; sessionStorage.setItem('mw-ouverte', '1'); } catch (_) {}
   if (recharge) return;
+  ouvertureFraiche = true;
   if (!LIENS_PRECIS.test(h) && !DEPUIS_NOTIF.test(h) && h !== '#/accueil') history.replaceState(history.state, '', location.pathname + location.search + '#/accueil');
 })();
 // Retour dans l'application après plus de 10 minutes : on repart aussi de l'Accueil
@@ -239,7 +241,43 @@ document.addEventListener('visibilitychange', () => {
   const h = location.hash;
   const occupe = /^#\/(deposer|direct\/|messages\/)/.test(h) || $('#form-depot button[disabled]') || !$('#modale').classList.contains('cache');
   if (!occupe && !h.startsWith('#/accueil')) location.hash = '#/accueil';
+  if (!occupe) setTimeout(rappelEvenements, 1200);
 });
+
+// ---------- Rappel des événements : dès 5 jours avant leur date, à chaque ouverture ----------
+async function rappelEvenements() {
+  if (!etat.session || !$('#modale').classList.contains('cache') || location.hash.startsWith('#/connexion')) return;
+  const fin = new Date(Date.now() + 5 * 864e5);
+  fin.setHours(23, 59, 59, 999);
+  let data = null, error = null;
+  try {
+    ({ data, error } = await sb.from('publications').select('id, evt_titre, evt_date, evt_lieu')
+      .eq('type', 'evenement').eq('statut', 'publie')
+      .gte('evt_date', new Date(Date.now() - 3 * 3600e3).toISOString()).lte('evt_date', fin.toISOString())
+      .order('evt_date', { ascending: true }).limit(10));
+  } catch (e) { console.warn(e); return; }
+  if (error || !data?.length) return;
+  const proches = data.filter((p) => new Date(p.evt_date) >= debutDuJour() && new Date(p.evt_date) <= fin);
+  if (!proches.length || !$('#modale').classList.contains('cache')) return;
+  ouvrirModale(`
+    <div class="rappel-evt">
+      <div class="rappel-icone">📅</div>
+      <h2 style="margin:6px 0 2px">${proches.length > 1 ? 'Événements à venir' : 'Événement à venir'}</h2>
+      <p class="doux petit" style="margin:0 0 12px">N'oubliez pas :</p>
+      ${proches.map((p) => `
+        <button class="carte rappel-ligne" data-evt="${p.id}">
+          <span class="rappel-quand">${esc(compteARebours(p.evt_date))}</span>
+          <b>${esc(p.evt_titre || 'Événement')}</b>
+          <span class="doux petit">${esc(dateEvenement(p.evt_date))}${p.evt_lieu ? ' · 📍 ' + esc(p.evt_lieu) : ''}</span>
+        </button>`).join('')}
+      <button class="btn secondaire plein" style="margin-top:6px" data-fermer>Fermer</button>
+    </div>`);
+  $$('#modale [data-evt]').forEach((b) => b.onclick = () => {
+    try { sessionStorage.setItem('mw-cible', b.dataset.evt); } catch (_) {}
+    fermerModale();
+    if (location.hash === '#/accueil/evenements') router(); else location.hash = '#/accueil/evenements';
+  });
+}
 
 // ---------- Bouton « retour » : demander avant de quitter l'application ----------
 // Une étape « garde » est ajoutée à l'historique. Quand l'utilisateur revient jusqu'au tout début,
@@ -1140,7 +1178,31 @@ function carteMonTitre(t) {
 // =========================================================
 // DÉPÔT D'UN TITRE
 // =========================================================
-async function vueDeposer() {
+// Formats audio que les navigateurs savent lire directement ; les autres (WMA, APE, AC3, AMR…) sont convertis en MP3
+const FORMATS_LISIBLES = ['mp3', 'm4a', 'aac', 'mp4', 'wav', 'ogg', 'oga', 'opus', 'flac', 'webm', 'weba', '3gp'];
+const extension = (nom) => (String(nom).split('.').pop() || '').toLowerCase();
+const formatLisible = (f) => FORMATS_LISIBLES.includes(extension(f.name)) || (!!f.type && /^audio\/(mpeg|mp3|mp4|aac|x-m4a|wav|x-wav|ogg|opus|flac|webm)$/.test(f.type) && extension(f.name) !== 'wma');
+
+function ouvrirBaseConversion() {
+  return new Promise((ok, ko) => {
+    const q = indexedDB.open('mongongo-conversion', 1);
+    q.onupgradeneeded = () => q.result.createObjectStore('travail');
+    q.onsuccess = () => ok(q.result);
+    q.onerror = () => ko(q.error);
+  });
+}
+async function travailConversion(action, valeur) {
+  const db = await ouvrirBaseConversion();
+  return new Promise((ok, ko) => {
+    const tx = db.transaction('travail', action === 'lire' ? 'readonly' : 'readwrite');
+    const st = tx.objectStore('travail');
+    const q = action === 'lire' ? st.get('courant') : action === 'effacer' ? st.delete('courant') : st.put(valeur, 'courant');
+    q.onsuccess = () => ok(q.result);
+    q.onerror = () => ko(q.error);
+  });
+}
+
+async function vueDeposer(param) {
   await chargerProfil();
   if (etat.artiste?.statut !== 'valide') { location.hash = '#/artiste'; return; }
   const prixDefaut = etat.tarifs.prix_telechargement_defaut?.montant ?? 2;
@@ -1185,6 +1247,7 @@ async function vueDeposer() {
 
       <div id="bloc-lot" class="cache">
         <p class="doux petit" style="margin:8px 0 0">Vérifiez le titre de chaque chanson (il est repris du nom du fichier) et l'ordre des pistes. Les titres sont déposés l'un après l'autre.</p>
+        <div id="bandeau-conv"></div>
         <div id="liste-lot" class="liste-lot"></div>
       </div>
 
@@ -1243,7 +1306,7 @@ async function vueDeposer() {
         <span class="num-lot">${avecAlbum ? d + i : i + 1}</span>
         <div class="corps-lot">
           <input value="${esc(x.titre)}" maxlength="120" data-titre="${i}" aria-label="Titre de la chanson ${i + 1}">
-          <span class="doux petit">${esc(x.fichier.name)} · ${(x.fichier.size / 1048576).toFixed(1).replace('.', ',')} Mo${x.message ? ' · ' + esc(x.message) : ''}</span>
+          <span class="doux petit">${esc(x.fichier.name)} · ${(x.fichier.size / 1048576).toFixed(1).replace('.', ',')} Mo${x.aConvertir ? ` · <b class="a-convertir">⚠ ${esc(extension(x.fichier.name).toUpperCase())} : à convertir en MP3</b>` : ''}${x.converti && !x.message ? ' · <b style="color:#2fae6f">✓ converti en MP3</b>' : ''}${x.message ? ' · ' + esc(x.message) : ''}</span>
         </div>
         <div class="outils-lot">
           <button type="button" data-monter="${i}" title="Monter" ${i === 0 ? 'disabled' : ''}>↑</button>
@@ -1253,6 +1316,10 @@ async function vueDeposer() {
       </div>`).join('') : '<p class="doux petit">Aucune chanson choisie.</p>';
     $('#btn-depot').textContent = lot.length > 1 ? `Enregistrer les ${lot.length} titres` : 'Enregistrer le titre';
     $('#bloc-lot').classList.toggle('cache', !lot.length);
+    const nbConv = lot.filter((x) => x.aConvertir).length;
+    const formats = [...new Set(lot.filter((x) => x.aConvertir).map((x) => extension(x.fichier.name).toUpperCase()))].join(', ');
+    $('#bandeau-conv').innerHTML = nbConv ? bandeauConversion(nbConv, formats) : '';
+    $('#btn-convertir')?.addEventListener('click', allerConvertir);
   };
   $('#liste-lot').addEventListener('input', (e) => { const i = e.target.dataset.titre; if (i != null) lot[i].titre = e.target.value; });
   $('#liste-lot').addEventListener('click', (e) => {
@@ -1294,8 +1361,29 @@ async function vueDeposer() {
   };
   $('#d-piste').oninput = () => { if (plusieurs) afficherLot(); };
 
+  const bandeauConversion = (n, formats) => `
+    <div class="carte bandeau-conv">
+      <div><b>🔄 ${n} fichier${n > 1 ? 's' : ''} au format ${esc(formats)}</b><br><span class="doux petit">Ce format ne peut pas être lu par le navigateur. MongongoWay peut ${n > 1 ? 'les' : 'le'} convertir en MP3, ici, sans perdre vos réglages.</span></div>
+      <button type="button" class="btn" id="btn-convertir">Convertir en MP3</button>
+    </div>`;
+  // Envoie les fichiers à la page de conversion, avec tout le formulaire, puis revient ici
+  async function allerConvertir() {
+    const b = $('#btn-convertir'); if (b) { b.disabled = true; b.textContent = 'Préparation…'; }
+    try {
+      const elements = plusieurs ? lot.map((x) => ({ nom: x.fichier.name, titre: x.titre, blob: x.fichier, aConvertir: !!x.aConvertir, converti: !!x.converti, etat: x.etat === 'fait' ? 'fait' : null }))
+        : [{ nom: champFichier().files[0].name, titre: $('#d-titre').value, blob: champFichier().files[0], aConvertir: true }];
+      await travailConversion('ecrire', {
+        fichiers: elements, cree_le: Date.now(),
+        formulaire: { plusieurs, mode: 'audio', genre: $('#d-genre').value, album: $('#d-album').value, piste: $('#d-piste').value,
+          prix: $('#d-prix').value, prixVideo: $('#d-prix-video').value, titre: $('#d-titre').value, paroles: $('#d-paroles').value,
+          pochette: $('#d-pochette').files[0] || null }
+      });
+      location.href = 'convertir.html';
+    } catch (err) { erreur(err); if (b) { b.disabled = false; b.textContent = 'Convertir en MP3'; } }
+  }
+
   const ajouterAuLot = (fichiers) => {
-    for (const f of fichiers) if (!lot.some((x) => x.fichier.name === f.name && x.fichier.size === f.size)) lot.push({ fichier: f, titre: titreDepuisFichier(f.name) });
+    for (const f of fichiers) if (!lot.some((x) => x.fichier.name === f.name && x.fichier.size === f.size)) lot.push({ fichier: f, titre: titreDepuisFichier(f.name), aConvertir: modeDepot() === 'audio' && !formatLisible(f) });
     lot.sort((a, b) => a.fichier.name.localeCompare(b.fichier.name, 'fr', { numeric: true }));
     afficherLot();
   };
@@ -1307,10 +1395,12 @@ async function vueDeposer() {
     const info = $('#info-audio');
     if (!f) { info.textContent = ''; return; }
     info.textContent = 'Lecture du fichier audio…';
+    const proposer = () => { info.innerHTML = bandeauConversion(1, extension(f.name).toUpperCase()); $('#btn-convertir').onclick = allerConvertir; };
+    if (!formatLisible(f)) return proposer();
     try {
       sonDepot = await decoderAudio(f);
       info.textContent = `${(f.size / 1048576).toFixed(1).replace('.', ',')} Mo · ${duree(Math.round(sonDepot.duration))}`;
-    } catch (err) { info.innerHTML = `<span style="color:var(--rouge)">${esc(err.message)}</span>`; }
+    } catch (err) { proposer(); }
   };
 
   // Analyse de la vidéo choisie et proposition de compression
@@ -1441,6 +1531,36 @@ async function vueDeposer() {
     return chemin;
   }
 
+  // Retour de la page de conversion : on remet le formulaire tel qu'il était, avec les fichiers convertis
+  if (param === 'reprise') {
+    const t = await travailConversion('lire').catch(() => null);
+    history.replaceState(history.state, '', location.pathname + location.search + '#/deposer');
+    if (t?.fichiers?.length) {
+      const f = t.formulaire || {};
+      const mettreFichier = (input, fichier) => { try { const dt = new DataTransfer(); dt.items.add(fichier); input.files = dt.files; return true; } catch (_) { return false; } };
+      plusieurs = !!f.plusieurs;
+      $('input[name=mode][value=audio]').checked = true;
+      $('#d-genre').value = f.genre || $('#d-genre').value;
+      $('#d-album').value = f.album || ''; $('#d-piste').value = f.piste || '';
+      if (f.prix) $('#d-prix').value = f.prix;
+      if (f.prixVideo) $('#d-prix-video').value = f.prixVideo;
+      $('#d-titre').value = f.titre || ''; $('#d-paroles').value = f.paroles || '';
+      if (f.pochette) mettreFichier($('#d-pochette'), f.pochette);
+      majAffichage();
+      const convertis = t.fichiers.filter((x) => x.converti).length, restants = t.fichiers.filter((x) => x.aConvertir).length;
+      if (plusieurs) {
+        lot = t.fichiers.map((x) => ({ fichier: x.blob, titre: x.titre || titreDepuisFichier(x.nom), aConvertir: !!x.aConvertir, converti: !!x.converti, etat: x.etat || null }));
+        $('#bloc-prix-video').classList.remove('cache');
+        afficherLot();
+      } else if (mettreFichier($('#d-audio'), t.fichiers[0].blob)) {
+        $('#d-audio').dispatchEvent(new Event('change'));
+      }
+      dessinerApercu();
+      await travailConversion('effacer').catch(() => {});
+      toast(restants ? `${convertis} fichier${convertis > 1 ? 's' : ''} converti${convertis > 1 ? 's' : ''}, ${restants} en échec.` : `✓ ${convertis} fichier${convertis > 1 ? 's' : ''} converti${convertis > 1 ? 's' : ''} en MP3. Vous pouvez enregistrer.`, !!restants);
+    }
+  }
+
   const horoUnique = Date.now();   // même nom de fichier en cas de nouvel essai : rien n'est envoyé deux fois
   $('#form-depot').onsubmit = async (e) => {
     e.preventDefault();
@@ -1464,6 +1584,7 @@ async function vueDeposer() {
       const titre = $('#d-titre').value.trim();
       if (!titre) { bouton.disabled = false; prog.classList.add('cache'); fin(); $('#d-titre').focus(); return toast('Indiquez le titre de la chanson.', true); }
       if (!fichier) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast(commun.mode === 'audio' ? 'Choisissez le fichier audio.' : 'Choisissez la vidéo du chant.', true); }
+      if (commun.mode === 'audio' && $('#btn-convertir')) { bouton.disabled = false; prog.classList.add('cache'); fin(); $('#info-audio').scrollIntoView({ behavior: 'smooth', block: 'center' }); return toast('Convertissez d\'abord le fichier en MP3 (bouton « Convertir en MP3 »).', true); }
       const etape = { nom: 'préparation' };
       const avancer = (x, msg) => { prog.firstElementChild.style.width = Math.round(x * 100) + '%'; bouton.textContent = msg; };
       try {
@@ -1491,6 +1612,7 @@ async function vueDeposer() {
     const aFaire = lot.filter((x) => x.etat !== 'fait');
     if (!aFaire.length) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast(lot.length ? 'Tous les titres sont déjà enregistrés.' : (commun.mode === 'audio' ? 'Choisissez les fichiers audio.' : 'Choisissez les vidéos.'), true); }
     if (lot.some((x) => !x.titre.trim())) { bouton.disabled = false; prog.classList.add('cache'); fin(); return toast('Chaque chanson doit avoir un titre.', true); }
+    if (lot.some((x) => x.aConvertir && x.etat !== 'fait')) { bouton.disabled = false; prog.classList.add('cache'); fin(); $('#bandeau-conv').scrollIntoView({ behavior: 'smooth', block: 'center' }); return toast('Convertissez d\'abord les fichiers en MP3 (bouton « Convertir en MP3 »).', true); }
     $$('#liste-lot input, #liste-lot button, .choix-nombre button, input[name=mode]').forEach((x) => x.disabled = true);
     const etape = { nom: 'envoi de la pochette' };
     let cheminImg = null;
@@ -1523,6 +1645,7 @@ async function vueDeposer() {
         const raison = `${et.nom} : ${err?.message || err}`;
         raisons[raison] = (raisons[raison] || 0) + 1;
         x.etat = 'echec'; x.message = `✗ échec (${raison})`; rates++;
+        if (/Format illisible/.test(raison)) { x.aConvertir = true; x.message = ''; x.etat = null; }
       }
       afficherLot();
       $$('#liste-lot input, #liste-lot button').forEach((y) => y.disabled = true);
@@ -2808,30 +2931,51 @@ async function vueConversation(autre) {
     <div class="conv-entete">
       <a href="#/messages" class="lien-bouton" style="font-size:22px" title="Retour">‹</a>
       <a href="#/membre/${p.id}" class="conv-qui"><div class="avatar petit-avatar">${esc((p.nom_complet || '?').charAt(0).toUpperCase())}</div><b>${esc(p.nom_complet || 'Membre')}</b></a>
+      <button class="lien-bouton conv-suppr" id="btn-suppr-conv" title="Supprimer la conversation" aria-label="Supprimer la conversation">🗑</button>
     </div>
     <div id="fil-messages" class="fil-messages"><div class="doux petit" style="text-align:center">Chargement…</div></div>
+    <div id="zone-enreg" class="zone-enreg cache">
+      <span class="point-enreg"></span><b id="chrono-enreg">0:00</b><span class="doux petit" style="flex:1">Enregistrement…</span>
+      <button type="button" class="btn secondaire petit" id="btn-annuler-enreg" title="Annuler">✕</button>
+      <button type="button" class="btn petit" id="btn-envoyer-enreg">➤ Envoyer</button>
+    </div>
     <form id="form-msg" class="form-msg">
-      <textarea id="msg-texte" maxlength="2000" rows="1" placeholder="Écrire un message…" required></textarea>
-      <button class="btn" type="submit" title="Envoyer">➤</button>
+      <button type="button" class="btn secondaire bouton-rond" id="btn-joindre-audio" title="Joindre un fichier audio">📎</button>
+      <input type="file" id="fichier-audio-msg" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus" class="cache">
+      <textarea id="msg-texte" maxlength="2000" rows="1" placeholder="Écrire un message…"></textarea>
+      <button type="button" class="btn secondaire bouton-rond" id="btn-micro" title="Enregistrer un message vocal">🎤</button>
+      <button class="btn bouton-rond" type="submit" title="Envoyer">➤</button>
     </form>
+    <div class="progression cache" id="prog-msg"><div></div></div>
     <p class="doux petit" style="text-align:center;margin-top:6px">🔒 Conversation privée : visible seulement par vous deux.</p>`;
 
   let messages = [];
+  const liensAudio = {};   // chemin → lien temporaire d'écoute
+  const { data: eff } = await sb.from('conversations_effacees').select('efface_le').eq('profil_id', uid).eq('autre_id', autre).maybeSingle();
+  const effaceLe = eff?.efface_le || null;
   const bulle = (m) => `<div class="bulle ${m.expediteur_id === uid ? 'moi' : 'lui'}" data-msg="${m.id}">
-      <div class="bulle-texte">${texteRiche(m.contenu)}</div>
+      ${m.audio_path ? `<div class="bulle-audio"><span>🎤</span><audio controls controlslist="nodownload noplaybackrate" preload="none" src="${esc(liensAudio[m.audio_path] || '')}"></audio>${m.audio_duree ? `<span class="doux petit">${duree(m.audio_duree)}</span>` : ''}</div>` : ''}
+      ${m.contenu?.trim() ? `<div class="bulle-texte">${texteRiche(m.contenu)}</div>` : ''}
       <div class="bulle-heure">${momentPrecis(m.cree_le)}${m.expediteur_id === uid ? (m.lu_le ? ' · Lu' : ' · Envoyé') : ''}</div>
     </div>`;
   const charger = async (defiler) => {
-    const { data, error: e2 } = await sb.from('messages').select('*')
-      .or(`and(expediteur_id.eq.${uid},destinataire_id.eq.${autre}),and(expediteur_id.eq.${autre},destinataire_id.eq.${uid})`)
-      .order('cree_le', { ascending: false }).limit(200);
+    let q = sb.from('messages').select('*')
+      .or(`and(expediteur_id.eq.${uid},destinataire_id.eq.${autre}),and(expediteur_id.eq.${autre},destinataire_id.eq.${uid})`);
+    if (effaceLe) q = q.gt('cree_le', effaceLe);
+    const { data, error: e2 } = await q.order('cree_le', { ascending: false }).limit(200);
     if (e2) return erreur(e2);
     const nouveaux = (data || []).reverse();
+    const aSigner = nouveaux.map((m) => m.audio_path).filter((c) => c && !liensAudio[c]);
+    if (aSigner.length) {
+      const { data: liens } = await sb.storage.from('messages-audio').createSignedUrls(aSigner, 60 * 60 * 6);
+      (liens || []).forEach((l, i) => { if (l?.signedUrl) liensAudio[aSigner[i]] = l.signedUrl; });
+    }
     const change = nouveaux.length !== messages.length || nouveaux.some((m, i) => m.id !== messages[i]?.id || m.lu_le !== messages[i]?.lu_le);
     messages = nouveaux;
     const zone = $('#fil-messages');
     if (!zone) return;
-    if (change || defiler) {
+    const enEcoute = [...zone.querySelectorAll('audio')].some((a) => !a.paused);
+    if ((change || defiler) && !(enEcoute && !defiler)) {
       const enBas = zone.scrollHeight - zone.scrollTop - zone.clientHeight < 80;
       zone.innerHTML = messages.map(bulle).join('') || `<div class="vide" style="padding:20px"><span class="grand">✉</span>Écrivez le premier message à ${esc(p.nom_complet || 'ce membre')}.</div>`;
       if (defiler || enBas) zone.scrollTop = zone.scrollHeight;
@@ -2845,6 +2989,101 @@ async function vueConversation(autre) {
   const ta = $('#msg-texte');
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'; });
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width: 900px)').matches) { e.preventDefault(); $('#form-msg').requestSubmit(); } });
+  // ---------- Messages audio : enregistrement au micro ou fichier joint ----------
+  const prog = $('#prog-msg');
+  const envoyerAudio = async (blob, dureeSec) => {
+    const type0 = (blob.type || 'audio/webm').split(';')[0];
+    const typesOk = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/aac': 'aac', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/wav': 'wav', 'audio/x-wav': 'wav' };
+    let fichier = blob, type = type0 === 'audio/mp3' ? 'audio/mpeg' : type0 === 'audio/m4a' ? 'audio/x-m4a' : type0 === 'audio/x-wav' ? 'audio/wav' : type0, ext = typesOk[type0];
+    prog.classList.remove('cache'); prog.firstElementChild.style.width = '10%';
+    try {
+      if (!ext || blob.size > 10 * 1024 * 1024) {
+        // Format non accepté ou fichier trop lourd : conversion dans l'application
+        const son = await decoderAudio(blob);
+        dureeSec = dureeSec || Math.round(son.duration);
+        const r = await convertirAudio(blob, son, (x) => { prog.firstElementChild.style.width = Math.round(10 + x * 50) + '%'; });
+        fichier = r.fichier; type = r.type; ext = r.ext;
+        if (fichier.size > 10 * 1024 * 1024) throw new Error('Audio trop long pour un message (10 Mo maximum).');
+      }
+      if (!dureeSec) { try { dureeSec = Math.round((await decoderAudio(fichier)).duration); } catch (_) {} }
+      const chemin = `${uid}/${autre}/${Date.now()}.${ext}`;
+      prog.firstElementChild.style.width = '65%';
+      const up = await sb.storage.from('messages-audio').upload(chemin, fichier, { contentType: type });
+      if (up.error) throw up.error;
+      const { error: e2 } = await sb.from('messages').insert({ expediteur_id: uid, destinataire_id: autre, contenu: ta.value.trim(), audio_path: chemin, audio_duree: dureeSec || null });
+      if (e2) { sb.storage.from('messages-audio').remove([chemin]); throw e2; }
+      ta.value = ''; ta.style.height = 'auto';
+      prog.firstElementChild.style.width = '100%';
+      await charger(true);
+    } catch (err) {
+      if (/Format illisible/.test(err?.message)) toast('Ce format audio n\'est pas accepté dans les messages. Envoyez un MP3 ou M4A, ou enregistrez un message vocal avec 🎤.', true);
+      else erreur(err);
+    }
+    setTimeout(() => prog.classList.add('cache'), 400);
+  };
+  $('#btn-joindre-audio').onclick = () => $('#fichier-audio-msg').click();
+  $('#fichier-audio-msg').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    if (f.size > 60 * 1024 * 1024) return toast('Fichier trop lourd.', true);
+    await envoyerAudio(f, null);
+  };
+  let enreg = null;
+  const arreterMicro = () => { try { enreg?.flux.getTracks().forEach((t) => t.stop()); } catch (_) {} clearInterval(enreg?.chrono); $('#zone-enreg')?.classList.add('cache'); $('#form-msg')?.classList.remove('cache'); };
+  $('#btn-micro').onclick = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('Enregistrement impossible sur ce navigateur : joignez un fichier audio avec 📎.', true);
+    let flux;
+    try { flux = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (_) { return toast('Micro refusé : autorisez le micro pour MongongoWay dans les réglages du téléphone.', true); }
+    const types = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'];
+    const mimeType = types.find((t) => MediaRecorder.isTypeSupported?.(t));
+    const rec = new MediaRecorder(flux, mimeType ? { mimeType, audioBitsPerSecond: 48000 } : undefined);
+    const morceaux = [];
+    const debut = Date.now();
+    enreg = { rec, flux, annule: false, chrono: setInterval(() => {
+      const s = Math.floor((Date.now() - debut) / 1000);
+      $('#chrono-enreg').textContent = duree(s);
+      if (s >= 300) $('#btn-envoyer-enreg').click();   // 5 minutes maximum
+    }, 250) };
+    rec.ondataavailable = (ev) => { if (ev.data.size) morceaux.push(ev.data); };
+    rec.onstop = () => {
+      const e2 = enreg; arreterMicro(); enreg = null;
+      if (e2.annule || !morceaux.length) return;
+      envoyerAudio(new Blob(morceaux, { type: rec.mimeType || mimeType || 'audio/webm' }), Math.max(1, Math.round((Date.now() - debut) / 1000)));
+    };
+    rec.start(1000);
+    $('#chrono-enreg').textContent = '0:00';
+    $('#zone-enreg').classList.remove('cache'); $('#form-msg').classList.add('cache');
+  };
+  $('#btn-annuler-enreg').onclick = () => { if (enreg) { enreg.annule = true; enreg.rec.state !== 'inactive' ? enreg.rec.stop() : arreterMicro(); } };
+  $('#btn-envoyer-enreg').onclick = () => { if (enreg && enreg.rec.state !== 'inactive') enreg.rec.stop(); };
+  window.addEventListener('hashchange', function quitter() { window.removeEventListener('hashchange', quitter); if (enreg && enreg.rec.state !== 'inactive') { enreg.annule = true; try { enreg.rec.stop(); } catch (_) {} } });
+
+  // ---------- Supprimer la conversation : pour moi seul ou pour nous deux ----------
+  $('#btn-suppr-conv').onclick = () => {
+    const nom = esc(p.nom_complet || 'ce membre');
+    ouvrirModale(`
+      <h2 style="margin-top:0">Supprimer la conversation ?</h2>
+      <p class="doux petit">Choisissez pour qui la conversation avec <b>${nom}</b> doit disparaître.</p>
+      <button class="carte choix-suppr" data-pour="moi"><b>🙋 Pour moi seul</b><br><span class="doux petit">Elle disparaît de votre téléphone. ${nom} la garde.</span></button>
+      <button class="carte choix-suppr" data-pour="tous"><b>👥 Pour nous deux</b><br><span class="doux petit">Tous les messages et les audios sont effacés chez vous et chez ${nom}. C'est définitif.</span></button>
+      <button class="btn secondaire plein" style="margin-top:6px" data-fermer>Annuler</button>`);
+    $$('#modale [data-pour]').forEach((b) => b.onclick = async () => {
+      const pourTous = b.dataset.pour === 'tous';
+      if (pourTous && !confirm(`Effacer définitivement toute la conversation pour vous et pour ${p.nom_complet || 'ce membre'} ?`)) return;
+      $$('#modale [data-pour]').forEach((x) => x.disabled = true);
+      const { data: audios, error: e3 } = await sb.rpc('supprimer_conversation', { p_autre: autre, p_pour_tous: pourTous });
+      if (e3) { $$('#modale [data-pour]').forEach((x) => x.disabled = false); return erreur(e3); }
+      const fichiers = (audios || []).map((x) => (typeof x === 'string' ? x : x?.supprimer_conversation)).filter(Boolean);
+      if (fichiers.length) await sb.storage.from('messages-audio').remove(fichiers);
+      fermerModale();
+      clearInterval(minuterieConversation);
+      majBadgeMessages();
+      toast(pourTous ? 'Conversation supprimée pour vous deux.' : 'Conversation supprimée de votre côté.');
+      location.hash = '#/messages';
+    });
+  };
+
   $('#form-msg').onsubmit = async (e) => {
     e.preventDefault();
     const contenu = ta.value.trim();
@@ -2858,12 +3097,14 @@ async function vueConversation(autre) {
   };
   $('#fil-messages').onclick = (e) => {
     const bl = e.target.closest('.bulle.moi');
-    if (!bl) return;
+    if (!bl || e.target.closest('audio')) return;
     ouvrirModale(`<h2 style="margin-top:0">Supprimer ce message ?</h2><p class="doux">Il disparaîtra aussi chez ${esc(p.nom_complet || 'le destinataire')}.</p>
       <button class="btn danger plein" id="ok-suppr-msg">Supprimer</button><button class="btn secondaire plein" style="margin-top:10px" data-fermer>Annuler</button>`);
     $('#ok-suppr-msg').onclick = async () => {
+      const m = messages.find((x) => x.id === bl.dataset.msg);
       const { error: e3 } = await sb.from('messages').delete().eq('id', bl.dataset.msg);
       if (e3) return erreur(e3);
+      if (m?.audio_path) sb.storage.from('messages-audio').remove([m.audio_path]);
       fermerModale(); charger(true);
     };
   };
@@ -3965,7 +4206,8 @@ sb.auth.onAuthStateChange((evenement, session) => {
         document.body.classList.remove('avec-lecteur');
         $('#lecteur').classList.add('cache');
       }
-      router();
+      await router();
+      if (session && ouvertureFraiche) { ouvertureFraiche = false; setTimeout(rappelEvenements, 1500); }
     }, 0);
   }
 });
