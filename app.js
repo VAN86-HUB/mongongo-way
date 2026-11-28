@@ -512,11 +512,39 @@ async function creerVideoDepuisAudio(son, infos, progres) {
   return { fichier: new File([output.target.buffer], 'clip.mp4', { type: 'video/mp4' }), largeur: canvas.width, hauteur: canvas.height, codecs: codecV + '/' + codecA };
 }
 
+// Conversion d'un audio non accepté (WAV, FLAC, OGG…) en fichier léger :
+// MP3 d'abord ; si l'encodeur MP3 ne se charge pas, M4A (AAC) avec l'encodeur intégré au navigateur.
+async function convertirAudio(fichier, son, progres) {
+  try {
+    const r = await extraireAudio(fichier, progres, son);
+    return { fichier: r.fichier, type: 'audio/mpeg', ext: 'mp3' };
+  } catch (e1) {
+    console.warn('MP3 impossible, essai en M4A', e1);
+    try {
+      const mb = await import(URL_MEDIABUNNY);
+      const codec = await mb.getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: Math.min(2, son.numberOfChannels), sampleRate: son.sampleRate });
+      if (!codec) throw new Error('aucun encodeur audio');
+      const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
+      const src = new mb.AudioBufferSource({ codec, bitrate: 128_000 });
+      output.addAudioTrack(src);
+      await output.start();
+      progres?.(0.3);
+      await src.add(son);
+      src.close();
+      await output.finalize();
+      progres?.(1);
+      return { fichier: new Blob([output.target.buffer], { type: 'audio/mp4' }), type: 'audio/mp4', ext: 'm4a' };
+    } catch (e2) {
+      throw new Error(`Conversion impossible de ce format (${(fichier.name.split('.').pop() || '?').toUpperCase()}). Convertissez-le en MP3 puis réessayez. [${e1?.message || e1} / ${e2?.message || e2}]`);
+    }
+  }
+}
+
 async function decoderAudio(fichier) {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   const ctx = new Ctx();
   try { return await ctx.decodeAudioData(await fichier.arrayBuffer()); }
-  catch (_) { throw new Error('Fichier audio illisible. Essayez un fichier MP3 ou M4A.'); }
+  catch (_) { throw new Error(`Format illisible par le navigateur (${(fichier.name.split('.').pop() || '?').toUpperCase()}). Utilisez un fichier MP3 ou M4A.`); }
   finally { ctx.close?.(); }
 }
 
@@ -1361,9 +1389,9 @@ async function vueDeposer() {
       const typesOk = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/x-m4a', 'audio/m4a'];
       let fichierAudio = fAud, typeA = fAud.type === 'audio/mp3' ? 'audio/mpeg' : fAud.type, extA = (fAud.name.split('.').pop() || '').toLowerCase();
       if (!typesOk.includes(fAud.type) || fAud.size > 30 * 1024 * 1024) {
-        etape.nom = 'conversion en MP3';
-        const r = await extraireAudio(fAud, (x) => avancer(0.04 + x * 0.16, `Conversion en MP3… ${Math.round(x * 100)} %`), son);
-        fichierAudio = r.fichier; typeA = 'audio/mpeg'; extA = 'mp3';
+        etape.nom = 'conversion de l\'audio';
+        const r = await convertirAudio(fAud, son, (x) => avancer(0.04 + x * 0.16, `Conversion de l'audio… ${Math.round(x * 100)} %`));
+        fichierAudio = r.fichier; typeA = r.type; extA = r.ext;
         if (fichierAudio.size > 30 * 1024 * 1024) throw new Error('Audio trop lourd, même converti (30 Mo max.).');
       }
       if (typeA === 'audio/m4a') typeA = 'audio/x-m4a';
@@ -1470,6 +1498,7 @@ async function vueDeposer() {
     catch (err) { erreur(err); toast('La pochette n\'a pas pu être envoyée : les titres seront déposés sans pochette.', true); }
     const debut = debutPiste();
     let reussis = 0, rates = 0, sansVid = 0;
+    const raisons = {};
     for (let k = 0; k < lot.length; k++) {
       const x = lot[k];
       if (x.etat === 'fait') continue;
@@ -1491,7 +1520,9 @@ async function vueDeposer() {
         if (o.sansVideo) sansVid++;
       } catch (err) {
         console.error(err);
-        x.etat = 'echec'; x.message = `✗ échec (${et.nom}) : ${err?.message || err}`; rates++;
+        const raison = `${et.nom} : ${err?.message || err}`;
+        raisons[raison] = (raisons[raison] || 0) + 1;
+        x.etat = 'echec'; x.message = `✗ échec (${raison})`; rates++;
       }
       afficherLot();
       $$('#liste-lot input, #liste-lot button').forEach((y) => y.disabled = true);
@@ -1505,7 +1536,9 @@ async function vueDeposer() {
       location.hash = '#/artiste';
       return;
     }
-    zoneErr.innerHTML = `<b style="color:var(--rouge)">${rates} titre${rates > 1 ? 's' : ''} non enregistré${rates > 1 ? 's' : ''}</b><p class="petit" style="margin:6px 0 0">${reussis} titre${reussis > 1 ? 's ont' : ' a'} bien été enregistré${reussis > 1 ? 's' : ''}. Touchez « Réessayer » : seuls les titres en échec seront renvoyés.</p>`;
+    zoneErr.innerHTML = `<b style="color:var(--rouge)">${rates} titre${rates > 1 ? 's' : ''} non enregistré${rates > 1 ? 's' : ''}</b><p class="petit" style="margin:6px 0 0">${reussis} titre${reussis > 1 ? 's ont' : ' a'} bien été enregistré${reussis > 1 ? 's' : ''}. Touchez « Réessayer » : seuls les titres en échec seront renvoyés.</p>
+      <p class="petit" style="margin:8px 0 0"><b>Cause${Object.keys(raisons).length > 1 ? 's' : ''} :</b></p>
+      <ul class="petit" style="margin:4px 0 0;padding-left:18px">${Object.entries(raisons).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, n]) => `<li>${esc(t)}${n > 1 ? ` <b>(${n} titres)</b>` : ''}</li>`).join('')}</ul>`;
     zoneErr.classList.remove('cache');
     zoneErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
     bouton.disabled = false; bouton.textContent = 'Réessayer les titres en échec';
