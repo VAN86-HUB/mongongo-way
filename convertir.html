@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141022">
+  <title>MongongoWay · Conversion en MP3</title>
+  <style>
+    :root { --fond: #141022; --carte: rgba(255,255,255,.06); --bord: rgba(255,255,255,.12); --texte: #f3eefc; --doux: #a69fbd; --or: #e8b04b; --vert: #2fae6f; --rouge: #e05252; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% 0, #2b2148, var(--fond) 60%); color: var(--texte); font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; }
+    main { width: 100%; max-width: 620px; padding: 28px 18px 40px; }
+    .marque { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 20px; margin-bottom: 22px; }
+    .marque span { color: var(--or); font-weight: 300; }
+    .rond { width: 26px; height: 26px; border-radius: 50%; background: var(--or); display: flex; align-items: center; justify-content: center; flex: none; }
+    .rond i { display: inline-block; width: 3px; margin: 0 1px; border-radius: 2px; background: var(--fond); }
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    p { margin: 0 0 14px; color: var(--doux); font-size: 14px; }
+    .barre { height: 8px; border-radius: 99px; background: var(--carte); overflow: hidden; margin: 14px 0 6px; }
+    .barre div { height: 100%; width: 0; background: var(--or); transition: width .3s; }
+    .ligne { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--bord); border-radius: 12px; background: var(--carte); margin-top: 8px; font-size: 14px; }
+    .ligne .nom { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ligne .etat { flex: none; color: var(--doux); font-size: 13px; }
+    .ligne.fait { border-color: var(--vert); } .ligne.fait .etat { color: var(--vert); }
+    .ligne.echec { border-color: var(--rouge); } .ligne.echec .etat { color: var(--rouge); }
+    .ligne.en-cours { border-color: var(--or); } .ligne.en-cours .etat { color: var(--or); }
+    .btn { display: block; width: 100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 14px; background: var(--or); color: #1a1426; font: 700 16px system-ui, sans-serif; cursor: pointer; }
+    .btn.secondaire { background: transparent; color: var(--texte); border: 1px solid var(--bord); }
+    .erreur { border: 1px solid var(--rouge); border-radius: 12px; padding: 12px; margin-top: 14px; font-size: 14px; }
+    .cache { display: none; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="marque"><div class="rond"><i style="height:8px"></i><i style="height:13px"></i><i style="height:8px"></i></div>Mongongo<span>Way</span></div>
+  <h1>Conversion en MP3</h1>
+  <p id="intro">Préparation du convertisseur… Gardez l'écran allumé : vous reviendrez automatiquement au dépôt à la fin.</p>
+  <div class="barre"><div id="barre"></div></div>
+  <p id="etat" style="font-size:13px"></p>
+  <div id="liste"></div>
+  <div id="erreur" class="erreur cache"></div>
+  <button class="btn cache" id="btn-retour">Revenir au dépôt</button>
+  <button class="btn secondaire" id="btn-annuler">Annuler et revenir</button>
+</main>
+<script src="ffmpeg.core.js"></script>
+<script src="convertir.js"></script>
+</body>
+</html>
