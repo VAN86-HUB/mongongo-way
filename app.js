@@ -337,8 +337,8 @@ function vueConnexion() {
     vue.innerHTML = `
       <div class="accueil-connexion">
         <img src="icon-512.png" alt="">
-        <h1>Mongongo <span style="color:var(--or)">Way</span></h1>
-        <p class="doux">La voix des musiciens de Theway RDC.<br>Écoute gratuite, partout.</p>
+        <h1>Mongongo<span style="color:var(--or)">Way</span></h1>
+        <p class="doux">La plateforme de la musique et des affaires des enfants de Dieu.<br>Écoute gratuite, partout.</p>
         <div class="onglets">
           <button data-mode="connexion" class="${mode === 'connexion' ? 'actif' : ''}">Se connecter</button>
           <button data-mode="inscription" class="${mode === 'inscription' ? 'actif' : ''}">Créer un compte</button>
@@ -2028,7 +2028,7 @@ async function vueProfil() {
     <div class="apropos">
       <img src="icon-192.png" width="40" height="40" alt="" style="border-radius:10px"><br>
       <b style="color:var(--texte)">MongongoWay</b> · version 1.0<br>
-      La plateforme musicale des musiciens de Theway RDC<br>
+      La plateforme de la musique et des affaires des enfants de Dieu<br>
       Conçue et développée par <b style="color:var(--texte)">Ingénieur Van MUFWAR</b>
     </div>`;
 
@@ -3731,7 +3731,7 @@ async function appelEntrant(a) {
 let canalAppelsEntrants = null;
 async function ecouterAppelsEntrants() {
   const uid = etat.session?.user?.id;
-  if (!uid || canalAppelsEntrants?.uid === uid) return;
+  if (!uid || canalAppelsEntrants?.uid === uid || typeof sb.channel !== 'function') return;
   try { if (canalAppelsEntrants) sb.removeChannel(canalAppelsEntrants.canal); } catch (_) {}
   const canal = sb.channel('appels-entrants-' + uid)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'appels', filter: `appele_id=eq.${uid}` }, ({ new: a }) => appelEntrant(a))
@@ -4860,7 +4860,7 @@ sb.auth.onAuthStateChange((evenement, session) => {
         $('#lecteur').classList.add('cache');
       }
       await router();
-      if (session) ecouterAppelsEntrants();
+      if (session) { try { ecouterAppelsEntrants(); } catch (e) { console.warn(e); } }
       if (session && ouvertureFraiche) { ouvertureFraiche = false; setTimeout(rappelEvenements, 1500); }
     }, 0);
   }

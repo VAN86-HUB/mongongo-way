@@ -1,7 +1,7 @@
 {
   "name": "MongongoWay",
   "short_name": "MongongoWay",
-  "description": "La voix des musiciens de Theway RDC",
+  "description": "La plateforme de la musique et des affaires des enfants de Dieu",
   "start_url": "./#/accueil",
   "scope": "./",
   "display": "standalone",

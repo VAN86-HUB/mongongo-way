@@ -1,5 +1,5 @@
 // Service worker MongongoWay : l'app s'ouvre même avec une connexion faible.
-const VERSION = 'mongongo-v41';
+const VERSION = 'mongongo-v43';
 const COQUILLE = [
   './', './index.html', './style.css', './app.js', './manifest.json',
   './icon-192.png', './icon-512.png', './fond.jpg'
